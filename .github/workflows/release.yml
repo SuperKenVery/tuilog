@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-nix:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build with Nix
+        run: nix build .#default
+
+      - name: Package
+        run: |
+          mkdir -p release
+          cp result/bin/logviewer release/
+          cd release
+          tar czvf ../logviewer-${{ matrix.target }}.tar.gz logviewer
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logviewer-${{ matrix.target }}
+          path: logviewer-${{ matrix.target }}.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          mkdir release
+          cp target/release/logviewer.exe release/
+          cd release
+          tar czvf ../logviewer-x86_64-pc-windows-msvc.tar.gz logviewer.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logviewer-x86_64-pc-windows-msvc
+          path: logviewer-x86_64-pc-windows-msvc.tar.gz
+
+  release:
+    needs: [build-nix, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.tar.gz
+          generate_release_notes: true

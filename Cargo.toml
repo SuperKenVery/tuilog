@@ -2,6 +2,14 @@
 name = "logviewer"
 version = "0.1.0"
 edition = "2021"
+description = "A terminal-based log viewer"
+repository = "https://github.com/SuperKenVery/tulog"
+license = "MIT"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
 
 [dependencies]
 anyhow = "1"

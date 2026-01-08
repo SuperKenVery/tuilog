@@ -1,75 +1,93 @@
 {
-  description = "An empty flake template that you can adapt to your own environment";
+  description = "Build a cargo project without extra checks";
 
-  # Flake inputs
-  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0"; # Stable Nixpkgs (use 0.1 for unstable)
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
-  # Flake outputs
+    crane.url = "github:ipetkov/crane";
+
+    flake-utils.url = "github:numtide/flake-utils";
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
   outputs =
-    { self, ... }@inputs:
-    let
-      # The systems supported for this flake's outputs
-      supportedSystems = [
-        "x86_64-linux" # 64-bit Intel/AMD Linux
-        "aarch64-linux" # 64-bit ARM Linux
-        "aarch64-darwin" # 64-bit ARM macOS
-      ];
+    {
+      self,
+      nixpkgs,
+      crane,
+      flake-utils,
+      rust-overlay,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ (import rust-overlay) ];
+        };
 
-      # Helper for providing system-specific attributes
-      forEachSupportedSystem =
-        f:
-        inputs.nixpkgs.lib.genAttrs supportedSystems (
-          system:
-          f {
-            inherit system;
-            # Provides a system-specific, configured Nixpkgs
-            pkgs = import inputs.nixpkgs {
-              inherit system;
-              # Enable using unfree packages
-              config.allowUnfree = true;
-            };
+        craneLib = (crane.mkLib pkgs).overrideToolchain (
+          p:
+          p.rust-bin.stable.latest.default.override {
+            extensions = ["rust-analyzer" "clippy"];
           }
         );
-    in
-    {
-      # Development environments output by this flake
 
-      # To activate the default environment:
-      # nix develop
-      # Or if you use direnv:
-      # direnv allow
-      devShells = forEachSupportedSystem (
-        { pkgs, system }:
-        {
-          # Run `nix develop` to activate this environment or `direnv allow` if you have direnv installed
-          default = pkgs.mkShellNoCC {
-            packages = with pkgs; [
-              self.formatter.${system}
-              cargo
-              rustc
-              rust-analyzer
-              clippy
-              rustfmt
-            ];
 
-            env = {
-              RUST_BACKTRACE = "1";
-            };
+        # Common arguments can be set here to avoid repeating them later
+        # Note: changes here will rebuild all dependency crates
+        commonArgs = {
+          src = craneLib.cleanCargoSource ./.;
+          strictDeps = true;
 
-            shellHook = "";
-          };
-        }
-      );
+          buildInputs = [
+            # Add additional build inputs here
+          ]
+          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            # Additional darwin specific inputs can be set here
+            pkgs.libiconv
+          ];
+        };
 
-      # Nix formatter
+        my-crate = craneLib.buildPackage (
+          commonArgs
+          // {
+            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-      # This applies the formatter that follows RFC 166, which defines a standard format:
-      # https://github.com/NixOS/rfcs/pull/166
+            # Additional environment variables or build phases/hooks can be set
+            # here *without* rebuilding all dependency crates
+            # MY_CUSTOM_VAR = "some value";
+          }
+        );
+      in
+      {
+        checks = {
+          inherit my-crate;
+        };
 
-      # To format all Nix files:
-      # git ls-files -z '*.nix' | xargs -0 -r nix fmt
-      # To check formatting:
-      # git ls-files -z '*.nix' | xargs -0 -r nix develop --command nixfmt --check
-      formatter = forEachSupportedSystem ({ pkgs, ... }: pkgs.nixfmt-rfc-style);
-    };
+        packages.default = my-crate;
+
+        apps.default = flake-utils.lib.mkApp {
+          drv = my-crate;
+        };
+
+        devShells.default = craneLib.devShell {
+          # Inherit inputs from checks.
+          checks = self.checks.${system};
+
+          # Additional dev-shell environment variables can be set directly
+          # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
+
+          # Extra inputs can be added here; cargo and rustc are provided by default.
+          packages = [
+            # pkgs.ripgrep
+          ];
+        };
+      }
+    );
 }
