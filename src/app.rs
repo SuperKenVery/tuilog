@@ -1,9 +1,11 @@
 use crate::filter::{parse_filter, FilterExpr};
 use crate::highlight::{apply_highlights, highlight_line};
+use crate::netinfo::{get_network_interfaces, InterfaceInfo};
 use crate::source::SourceEvent;
 use crate::state::AppState;
 use chrono::Local;
 use fancy_regex::Regex;
+use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
 
 #[derive(Clone)]
@@ -35,6 +37,29 @@ pub struct App {
     pub follow_tail: bool,
     pub source_rx: Receiver<SourceEvent>,
     pub status_message: Option<String>,
+    pub listen_port: Option<u16>,
+    pub has_connection: bool,
+    pub network_interfaces: Vec<InterfaceInfo>,
+    pub listen_display_mode: ListenDisplayMode,
+    pub listen_addr_list: Vec<ListenAddrEntry>,
+    pub listen_selected_idx: usize,
+    pub listen_popup_area: Option<(u16, u16, u16, u16)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum ListenDisplayMode {
+    #[default]
+    AddrPort,
+    NcCommand,
+}
+
+#[derive(Clone)]
+pub struct ListenAddrEntry {
+    pub ip: IpAddr,
+    pub is_v6: bool,
+    #[allow(dead_code)]
+    pub is_self_assigned: bool,
+    pub row: u16,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -46,11 +71,16 @@ pub enum InputMode {
 }
 
 impl App {
-    pub fn new(source_rx: Receiver<SourceEvent>) -> Self {
+    pub fn new(source_rx: Receiver<SourceEvent>, listen_port: Option<u16>) -> Self {
         let state = AppState::load();
         let hide_cursor = state.hide_input.chars().count();
         let filter_cursor = state.filter_input.chars().count();
         let highlight_cursor = state.highlight_input.chars().count();
+        let network_interfaces = if listen_port.is_some() {
+            get_network_interfaces()
+        } else {
+            Vec::new()
+        };
         let mut app = Self {
             lines: Vec::new(),
             filtered_indices: Vec::new(),
@@ -74,6 +104,13 @@ impl App {
             follow_tail: true,
             source_rx,
             status_message: None,
+            listen_port,
+            has_connection: false,
+            network_interfaces,
+            listen_display_mode: ListenDisplayMode::default(),
+            listen_addr_list: Vec::new(),
+            listen_selected_idx: 0,
+            listen_popup_area: None,
         };
         app.apply_hide();
         app.apply_filter();
@@ -98,8 +135,72 @@ impl App {
                 SourceEvent::Error(e) => {
                     self.status_message = Some(format!("Source error: {}", e));
                 }
+                SourceEvent::Connected(_peer) => {
+                    self.has_connection = true;
+                }
             }
         }
+    }
+
+    pub fn show_listen_popup(&self) -> bool {
+        self.listen_port.is_some() && !self.has_connection
+    }
+
+    pub fn toggle_listen_display_mode(&mut self) {
+        self.listen_display_mode = match self.listen_display_mode {
+            ListenDisplayMode::AddrPort => ListenDisplayMode::NcCommand,
+            ListenDisplayMode::NcCommand => ListenDisplayMode::AddrPort,
+        };
+    }
+
+    pub fn listen_select_next(&mut self) {
+        if !self.listen_addr_list.is_empty() {
+            self.listen_selected_idx = (self.listen_selected_idx + 1) % self.listen_addr_list.len();
+        }
+    }
+
+    pub fn listen_select_prev(&mut self) {
+        if !self.listen_addr_list.is_empty() {
+            self.listen_selected_idx = self.listen_selected_idx
+                .checked_sub(1)
+                .unwrap_or(self.listen_addr_list.len() - 1);
+        }
+    }
+
+    pub fn get_selected_copy_text(&self) -> Option<String> {
+        let port = self.listen_port?;
+        let entry = self.listen_addr_list.get(self.listen_selected_idx)?;
+        Some(match self.listen_display_mode {
+            ListenDisplayMode::AddrPort => {
+                if entry.is_v6 {
+                    format!("[{}]:{}", entry.ip, port)
+                } else {
+                    format!("{}:{}", entry.ip, port)
+                }
+            }
+            ListenDisplayMode::NcCommand => {
+                if entry.is_v6 {
+                    format!("nc -6 {} {}", entry.ip, port)
+                } else {
+                    format!("nc {} {}", entry.ip, port)
+                }
+            }
+        })
+    }
+
+    pub fn handle_listen_popup_click(&mut self, x: u16, y: u16) -> Option<String> {
+        let (px, py, pw, ph) = self.listen_popup_area?;
+        if x < px || x >= px + pw || y < py || y >= py + ph {
+            return None;
+        }
+
+        for (idx, entry) in self.listen_addr_list.iter().enumerate() {
+            if y == py + entry.row {
+                self.listen_selected_idx = idx;
+                return self.get_selected_copy_text();
+            }
+        }
+        None
     }
 
     pub fn get_display_content(&self, line: &LogLine) -> String {

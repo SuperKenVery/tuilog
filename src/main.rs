@@ -1,6 +1,7 @@
 mod app;
 mod filter;
 mod highlight;
+mod netinfo;
 mod source;
 mod state;
 mod ui;
@@ -9,7 +10,10 @@ use anyhow::Result;
 use app::{App, InputMode};
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
+        MouseButton, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -53,7 +57,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, rx);
+    let result = run_app(&mut terminal, rx, cli.port);
 
     disable_raw_mode()?;
     execute!(
@@ -73,19 +77,53 @@ fn main() -> Result<()> {
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     rx: mpsc::Receiver<SourceEvent>,
+    listen_port: Option<u16>,
 ) -> Result<()> {
-    let mut app = App::new(rx);
+    let mut app = App::new(rx, listen_port);
 
     loop {
         app.poll_source();
 
         let visible_height = terminal.size()?.height.saturating_sub(9) as usize;
 
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
+            let ev = event::read()?;
+
+            if let Event::Mouse(mouse) = &ev {
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                    if app.show_listen_popup() {
+                        if let Some(text) = app.handle_listen_popup_click(mouse.column, mouse.row) {
+                            copy_to_clipboard(&text);
+                            app.status_message = Some(format!("Copied: {}", text));
+                        }
+                    }
+                }
+            }
+
+            if let Event::Key(key) = ev {
                 app.status_message = None;
+
+                if app.show_listen_popup() {
+                    match key.code {
+                        KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(())
+                        }
+                        KeyCode::Tab => app.toggle_listen_display_mode(),
+                        KeyCode::Up | KeyCode::Char('k') => app.listen_select_prev(),
+                        KeyCode::Down | KeyCode::Char('j') => app.listen_select_next(),
+                        KeyCode::Enter => {
+                            if let Some(text) = app.get_selected_copy_text() {
+                                copy_to_clipboard(&text);
+                                app.status_message = Some(format!("Copied: {}", text));
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
 
                 match app.input_mode {
                     InputMode::Normal => match key.code {
@@ -273,6 +311,62 @@ fn run_app(
                     },
                 }
             }
+        }
+    }
+}
+
+fn copy_to_clipboard(text: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        if let Ok(mut child) = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let cmds = ["xclip", "xsel"];
+        for cmd in cmds {
+            if let Ok(mut child) = Command::new(cmd)
+                .args(if cmd == "xclip" {
+                    &["-selection", "clipboard"][..]
+                } else {
+                    &["--clipboard", "--input"][..]
+                })
+                .stdin(Stdio::piped())
+                .spawn()
+            {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        if let Ok(mut child) = Command::new("clip")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
         }
     }
 }

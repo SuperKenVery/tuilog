@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -27,6 +27,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     if app.input_mode != InputMode::Normal {
         draw_help_popup(frame);
+    }
+
+    if app.show_listen_popup() {
+        draw_listen_popup(frame, app);
     }
 }
 
@@ -313,4 +317,219 @@ fn draw_help_popup(frame: &mut Frame) {
 
     frame.render_widget(Clear, popup_area);
     frame.render_widget(help, popup_area);
+}
+
+fn draw_listen_popup(frame: &mut Frame, app: &mut App) {
+    let port = app.listen_port.unwrap_or(0);
+    let interfaces = &app.network_interfaces;
+    let display_mode = app.listen_display_mode;
+
+    let mut max_addr_width: usize = 0;
+    for iface in interfaces {
+        let iface_width = iface.name.len() + if iface.is_default { 10 } else { 0 };
+        max_addr_width = max_addr_width.max(iface_width);
+
+        for addr_info in &iface.addresses {
+            let is_v6 = addr_info.ip.is_ipv6();
+            let addr_width = calc_addr_line_width(&addr_info.ip, port, is_v6, display_mode);
+            max_addr_width = max_addr_width.max(addr_width);
+        }
+    }
+
+    let header_width = "Mode (Tab): [addr:port]  nc command ".len();
+    let max_content_width = max_addr_width.max(header_width);
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut addr_entries: Vec<crate::app::ListenAddrEntry> = Vec::new();
+
+    lines.push(Line::from(vec![
+        Span::styled("Listening on port ", Style::default().fg(Color::White)),
+        Span::styled(format!("{}", port), Style::default().fg(Color::Yellow)),
+    ]));
+    lines.push(Line::from(""));
+
+    let mode_str = match display_mode {
+        crate::app::ListenDisplayMode::AddrPort => "[addr:port]  nc command ",
+        crate::app::ListenDisplayMode::NcCommand => " addr:port  [nc command]",
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Mode (Tab): ", Style::default().fg(Color::Gray)),
+        Span::styled(mode_str, Style::default().fg(Color::Yellow)),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "↑↓:Select  Enter/Click:Copy",
+        Style::default().fg(Color::Gray),
+    )));
+    lines.push(Line::from(""));
+
+    if interfaces.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No network interfaces found",
+            Style::default().fg(Color::Red),
+        )));
+    } else {
+        let mut addr_idx = 0;
+        for iface in interfaces {
+            let name_style = if iface.is_default {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+
+            let suffix = if iface.is_default { " (default)" } else { "" };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{}", iface.name, suffix), name_style),
+            ]));
+
+            for addr_info in &iface.addresses {
+                let is_v6 = addr_info.ip.is_ipv6();
+                let is_selected = addr_idx == app.listen_selected_idx;
+                let current_row = lines.len() as u16 + 1;
+
+                addr_entries.push(crate::app::ListenAddrEntry {
+                    ip: addr_info.ip,
+                    is_v6,
+                    is_self_assigned: addr_info.is_self_assigned,
+                    row: current_row,
+                });
+
+                let line = build_addr_line(
+                    &addr_info.ip,
+                    port,
+                    is_v6,
+                    addr_info.is_self_assigned,
+                    is_selected,
+                    display_mode,
+                );
+                lines.push(line);
+                addr_idx += 1;
+            }
+        }
+    }
+
+    let content_height = lines.len() as u16 + 2;
+    let max_width = (max_content_width + 4) as u16;
+
+    let area = frame.area();
+    let popup_width = max_width.min(area.width.saturating_sub(4)).max(45);
+    let popup_height = content_height.min(area.height.saturating_sub(4)).max(8);
+
+    let popup_area = Rect {
+        x: area.width.saturating_sub(popup_width) / 2,
+        y: area.height.saturating_sub(popup_height) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let popup = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Network Info ")
+                .border_style(Style::default().fg(Color::Magenta)),
+        )
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(popup, popup_area);
+
+    app.listen_addr_list = addr_entries;
+    app.listen_popup_area = Some((popup_area.x, popup_area.y, popup_area.width, popup_area.height));
+}
+
+fn calc_addr_line_width(
+    ip: &std::net::IpAddr,
+    port: u16,
+    is_v6: bool,
+    display_mode: crate::app::ListenDisplayMode,
+) -> usize {
+    let prefix_len = 2;
+    let ip_str = ip.to_string();
+    let port_str = port.to_string();
+
+    match display_mode {
+        crate::app::ListenDisplayMode::AddrPort => {
+            if is_v6 {
+                prefix_len + 1 + ip_str.len() + 1 + 1 + port_str.len()
+            } else {
+                prefix_len + ip_str.len() + 1 + port_str.len()
+            }
+        }
+        crate::app::ListenDisplayMode::NcCommand => {
+            if is_v6 {
+                prefix_len + 3 + 3 + ip_str.len() + 1 + port_str.len()
+            } else {
+                prefix_len + 3 + ip_str.len() + 1 + port_str.len()
+            }
+        }
+    }
+}
+
+fn build_addr_line<'a>(
+    ip: &std::net::IpAddr,
+    port: u16,
+    is_v6: bool,
+    is_self_assigned: bool,
+    is_selected: bool,
+    display_mode: crate::app::ListenDisplayMode,
+) -> Line<'a> {
+    let base_addr_style = if is_self_assigned {
+        Style::default().fg(Color::DarkGray)
+    } else if is_selected {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let dim_style = if is_self_assigned {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    let prefix = if is_selected { "▶ " } else { "  " };
+    let prefix_style = if is_selected {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+
+    match display_mode {
+        crate::app::ListenDisplayMode::AddrPort => {
+            if is_v6 {
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("[", dim_style),
+                    Span::styled(ip.to_string(), base_addr_style),
+                    Span::styled("]", dim_style),
+                    Span::styled(format!(":{}", port), dim_style),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled(ip.to_string(), base_addr_style),
+                    Span::styled(format!(":{}", port), dim_style),
+                ])
+            }
+        }
+        crate::app::ListenDisplayMode::NcCommand => {
+            if is_v6 {
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("nc ", dim_style),
+                    Span::styled("-6 ", dim_style),
+                    Span::styled(ip.to_string(), base_addr_style),
+                    Span::styled(format!(" {}", port), dim_style),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("nc ", dim_style),
+                    Span::styled(ip.to_string(), base_addr_style),
+                    Span::styled(format!(" {}", port), dim_style),
+                ])
+            }
+        }
+    }
 }

@@ -17,6 +17,7 @@ pub enum LogSource {
 pub enum SourceEvent {
     Line(String),
     Error(String),
+    Connected(String),
 }
 
 pub fn start_source(source: LogSource, tx: Sender<SourceEvent>) -> Result<()> {
@@ -131,6 +132,7 @@ fn handle_client(stream: TcpStream, tx: Sender<SourceEvent>) {
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
+    let _ = tx.send(SourceEvent::Connected(peer.clone()));
     let _ = tx.send(SourceEvent::Line(format!("[connected: {}]", peer)));
 
     let reader = BufReader::new(&stream);
