@@ -2,6 +2,7 @@
 
 View and stream your logs in terminal.
 
+Screenshot: viewing `Cargo.lock` in this app
 ![](./readme_assets/screenshot.png)
 
 ## Features
