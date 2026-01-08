@@ -94,7 +94,8 @@ fn run_app(
                         {
                             return Ok(())
                         }
-                        KeyCode::Char('/') => app.input_mode = InputMode::FilterEdit,
+                        KeyCode::Char('d') => app.input_mode = InputMode::HideEdit,
+                        KeyCode::Char('f') => app.input_mode = InputMode::FilterEdit,
                         KeyCode::Char('h') => app.input_mode = InputMode::HighlightEdit,
                         KeyCode::Char('c') => app.clear(),
                         KeyCode::Char('t') => app.toggle_time(),
@@ -108,6 +109,20 @@ fn run_app(
                         KeyCode::PageDown => app.scroll_down(visible_height, visible_height),
                         KeyCode::Home => app.scroll_to_start(),
                         KeyCode::End => app.scroll_to_end(visible_height),
+                        _ => {}
+                    },
+                    InputMode::HideEdit => match key.code {
+                        KeyCode::Enter => {
+                            app.apply_hide();
+                            if app.hide_error.is_none() {
+                                app.input_mode = InputMode::Normal;
+                            }
+                        }
+                        KeyCode::Esc => app.input_mode = InputMode::Normal,
+                        KeyCode::Char(c) => app.hide_input.push(c),
+                        KeyCode::Backspace => {
+                            app.hide_input.pop();
+                        }
                         _ => {}
                     },
                     InputMode::FilterEdit => match key.code {

@@ -13,18 +13,54 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Length(3),
+            Constraint::Length(3),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
         .split(frame.area());
 
-    draw_filter_input(frame, app, chunks[0]);
-    draw_highlight_input(frame, app, chunks[1]);
-    draw_log_view(frame, app, chunks[2]);
-    draw_status_bar(frame, app, chunks[3]);
+    draw_hide_input(frame, app, chunks[0]);
+    draw_filter_input(frame, app, chunks[1]);
+    draw_highlight_input(frame, app, chunks[2]);
+    draw_log_view(frame, app, chunks[3]);
+    draw_status_bar(frame, app, chunks[4]);
 
     if app.input_mode != InputMode::Normal {
         draw_help_popup(frame);
+    }
+}
+
+fn draw_hide_input(frame: &mut Frame, app: &App, area: Rect) {
+    let style = if app.input_mode == InputMode::HideEdit {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+
+    let title = if app.hide_error.is_some() {
+        format!(" Hide (Error: {}) ", app.hide_error.as_ref().unwrap())
+    } else {
+        " Hide (d) ".to_string()
+    };
+
+    let border_style = if app.hide_error.is_some() {
+        Style::default().fg(Color::Red)
+    } else {
+        style
+    };
+
+    let input = Paragraph::new(app.hide_input.as_str())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(border_style),
+        )
+        .style(style);
+    frame.render_widget(input, area);
+
+    if app.input_mode == InputMode::HideEdit {
+        frame.set_cursor_position((area.x + app.hide_input.len() as u16 + 1, area.y + 1));
     }
 }
 
@@ -38,7 +74,7 @@ fn draw_filter_input(frame: &mut Frame, app: &App, area: Rect) {
     let title = if app.filter_error.is_some() {
         format!(" Filter (Error: {}) ", app.filter_error.as_ref().unwrap())
     } else {
-        " Filter (/) ".to_string()
+        " Filter (f) ".to_string()
     };
 
     let border_style = if app.filter_error.is_some() {
@@ -235,7 +271,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         msg.clone()
     } else {
         format!(
-            "q:Quit /:Filter h:Highlight c:Clear t:Time({}) s:Syntax({}) w:Wrap({}) g/G:Top/Bot",
+            "q:Quit d:Hide f:Filter h:Highlight c:Clear t:Time({}) s:Syntax({}) w:Wrap({})",
             if app.show_time { "ON" } else { "OFF" },
             if app.heuristic_highlight { "ON" } else { "OFF" },
             if app.wrap_lines { "ON" } else { "OFF" }
