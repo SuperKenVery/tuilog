@@ -139,6 +139,7 @@ fn run_app(
                         KeyCode::Char('c') => app.clear(),
                         KeyCode::Char('t') => app.toggle_time(),
                         KeyCode::Char('s') => app.toggle_heuristic(),
+                        KeyCode::Char('J') => app.toggle_json(),
                         KeyCode::Char('w') => app.toggle_wrap(),
                         KeyCode::Char('g') => app.scroll_to_start(visible_height),
                         KeyCode::Char('G') => app.scroll_to_end(visible_height),

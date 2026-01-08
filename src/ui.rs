@@ -280,9 +280,10 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         msg.clone()
     } else {
         format!(
-            "q:Quit d:Hide f:Filter h:Highlight c:Clear t:Time({}) s:Syntax({}) w:Wrap({})",
+            "q:Quit d:Hide f:Filter h:Highlight c:Clear t:Time({}) s:Syntax({}) J:JSON({}) w:Wrap({})",
             if app.show_time { "ON" } else { "OFF" },
             if app.heuristic_highlight { "ON" } else { "OFF" },
+            if app.json_highlight { "ON" } else { "OFF" },
             if app.wrap_lines { "ON" } else { "OFF" }
         )
     };

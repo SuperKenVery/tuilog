@@ -32,6 +32,7 @@ pub struct App {
     pub highlight_error: Option<String>,
     pub show_time: bool,
     pub heuristic_highlight: bool,
+    pub json_highlight: bool,
     pub wrap_lines: bool,
     pub input_mode: InputMode,
     pub follow_tail: bool,
@@ -99,6 +100,7 @@ impl App {
             highlight_error: None,
             show_time: true,
             heuristic_highlight: true,
+            json_highlight: true,
             wrap_lines: false,
             input_mode: InputMode::Normal,
             follow_tail: true,
@@ -408,6 +410,7 @@ impl App {
             &content,
             self.highlight_expr.as_ref(),
             self.heuristic_highlight,
+            self.json_highlight,
         );
         apply_highlights(&content, &spans)
     }
@@ -418,6 +421,10 @@ impl App {
 
     pub fn toggle_heuristic(&mut self) {
         self.heuristic_highlight = !self.heuristic_highlight;
+    }
+
+    pub fn toggle_json(&mut self) {
+        self.json_highlight = !self.json_highlight;
     }
 
     pub fn toggle_wrap(&mut self) {
