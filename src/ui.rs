@@ -298,7 +298,7 @@ fn draw_help_popup(frame: &mut Frame) {
 
     let help_text = vec![
         Line::from("Enter: Apply | Esc: Cancel"),
-        Line::from("Syntax: pattern && pattern || pattern"),
+        Line::from("Syntax: pattern && !pattern || pattern"),
         Line::from("Use quotes for special chars: \"a||b\""),
     ];
 

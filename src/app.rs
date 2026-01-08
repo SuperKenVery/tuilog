@@ -1,6 +1,7 @@
 use crate::filter::{parse_filter, FilterExpr};
 use crate::highlight::{apply_highlights, highlight_line};
 use crate::source::SourceEvent;
+use crate::state::AppState;
 use chrono::Local;
 use fancy_regex::Regex;
 use std::sync::mpsc::Receiver;
@@ -43,17 +44,18 @@ pub enum InputMode {
 
 impl App {
     pub fn new(source_rx: Receiver<SourceEvent>) -> Self {
-        Self {
+        let state = AppState::load();
+        let mut app = Self {
             lines: Vec::new(),
             filtered_indices: Vec::new(),
             bottom_line_idx: 0,
-            hide_input: String::new(),
+            hide_input: state.hide_input,
             hide_regex: None,
             hide_error: None,
-            filter_input: String::new(),
+            filter_input: state.filter_input,
             filter_expr: None,
             filter_error: None,
-            highlight_input: String::new(),
+            highlight_input: state.highlight_input,
             highlight_expr: None,
             highlight_error: None,
             show_time: true,
@@ -63,7 +65,11 @@ impl App {
             follow_tail: true,
             source_rx,
             status_message: None,
-        }
+        };
+        app.apply_hide();
+        app.apply_filter();
+        app.apply_highlight();
+        app
     }
 
     pub fn poll_source(&mut self) {
@@ -165,6 +171,15 @@ impl App {
         }
     }
 
+    fn save_state(&self) {
+        let state = AppState {
+            hide_input: self.hide_input.clone(),
+            filter_input: self.filter_input.clone(),
+            highlight_input: self.highlight_input.clone(),
+        };
+        state.save();
+    }
+
     pub fn apply_hide(&mut self) {
         if self.hide_input.trim().is_empty() {
             self.hide_regex = None;
@@ -182,6 +197,7 @@ impl App {
             }
         }
         self.rebuild_filtered_indices();
+        self.save_state();
     }
 
     pub fn apply_filter(&mut self) {
@@ -201,6 +217,7 @@ impl App {
             }
         }
         self.rebuild_filtered_indices();
+        self.save_state();
     }
 
     pub fn apply_highlight(&mut self) {
@@ -218,6 +235,7 @@ impl App {
                 }
             }
         }
+        self.save_state();
     }
 
     fn rebuild_filtered_indices(&mut self) {

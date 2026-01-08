@@ -238,4 +238,23 @@ mod tests {
         assert!(filter.matches("error in production"));
         assert!(!filter.matches("debug error message"));
     }
+
+    #[test]
+    fn test_negative_pattern() {
+        let filter = parse_filter("error && !debug").unwrap();
+        assert!(filter.matches("error in production"));
+        assert!(filter.matches("fatal error occurred"));
+        assert!(!filter.matches("debug error message"));
+        assert!(!filter.matches("debug: some info"));
+        assert!(!filter.matches("no match here"));
+    }
+
+    #[test]
+    fn test_negative_with_quoted_spaces() {
+        let filter = parse_filter(r#"error && !"debug mode""#).unwrap();
+        assert!(filter.matches("error in production"));
+        assert!(filter.matches("error debug"));
+        assert!(!filter.matches("error in debug mode"));
+        assert!(!filter.matches("debug mode error"));
+    }
 }

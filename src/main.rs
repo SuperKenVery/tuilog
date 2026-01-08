@@ -2,6 +2,7 @@ mod app;
 mod filter;
 mod highlight;
 mod source;
+mod state;
 mod ui;
 
 use anyhow::Result;
