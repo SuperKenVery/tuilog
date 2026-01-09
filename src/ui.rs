@@ -1,4 +1,9 @@
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, ListenAddrEntry, ListenDisplayMode};
+use crate::constants::{
+    HELP_POPUP_HEIGHT, HELP_POPUP_WIDTH, INPUT_FIELD_HEIGHT, QUIT_POPUP_HEIGHT, QUIT_POPUP_WIDTH,
+    STATUS_BAR_HEIGHT,
+};
+use crate::input::TextInput;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -11,17 +16,35 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
+            Constraint::Length(INPUT_FIELD_HEIGHT),
+            Constraint::Length(INPUT_FIELD_HEIGHT),
+            Constraint::Length(INPUT_FIELD_HEIGHT),
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(STATUS_BAR_HEIGHT),
         ])
         .split(frame.area());
 
-    draw_hide_input(frame, app, chunks[0]);
-    draw_filter_input(frame, app, chunks[1]);
-    draw_highlight_input(frame, app, chunks[2]);
+    draw_text_input(
+        frame,
+        &app.input_fields.hide,
+        chunks[0],
+        " Hide (d) ",
+        app.input_mode == InputMode::HideEdit,
+    );
+    draw_text_input(
+        frame,
+        &app.input_fields.filter,
+        chunks[1],
+        " Filter (f) ",
+        app.input_mode == InputMode::FilterEdit,
+    );
+    draw_text_input(
+        frame,
+        &app.input_fields.highlight,
+        chunks[2],
+        " Highlight (h) ",
+        app.input_mode == InputMode::HighlightEdit,
+    );
     draw_log_view(frame, app, chunks[3]);
     draw_status_bar(frame, app, chunks[4]);
 
@@ -29,7 +52,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_help_popup(frame);
     }
 
-    if app.show_listen_popup() {
+    if app.listen_state.show_popup() {
         draw_listen_popup(frame, app);
     }
 
@@ -38,26 +61,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_hide_input(frame: &mut Frame, app: &App, area: Rect) {
-    let style = if app.input_mode == InputMode::HideEdit {
+fn draw_text_input(frame: &mut Frame, input: &TextInput, area: Rect, label: &str, is_active: bool) {
+    let style = if is_active {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
     };
 
-    let title = if app.hide_error.is_some() {
-        format!(" Hide (Error: {}) ", app.hide_error.as_ref().unwrap())
+    let title = if let Some(err) = &input.error {
+        format!("{} (Error: {}) ", label.trim(), err)
     } else {
-        " Hide (d) ".to_string()
+        label.to_string()
     };
 
-    let border_style = if app.hide_error.is_some() {
+    let border_style = if input.has_error() {
         Style::default().fg(Color::Red)
     } else {
         style
     };
 
-    let input = Paragraph::new(app.hide_input.as_str())
+    let widget = Paragraph::new(input.text.as_str())
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -65,81 +88,10 @@ fn draw_hide_input(frame: &mut Frame, app: &App, area: Rect) {
                 .border_style(border_style),
         )
         .style(style);
-    frame.render_widget(input, area);
+    frame.render_widget(widget, area);
 
-    if app.input_mode == InputMode::HideEdit {
-        frame.set_cursor_position((area.x + app.hide_cursor as u16 + 1, area.y + 1));
-    }
-}
-
-fn draw_filter_input(frame: &mut Frame, app: &App, area: Rect) {
-    let style = if app.input_mode == InputMode::FilterEdit {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
-
-    let title = if app.filter_error.is_some() {
-        format!(" Filter (Error: {}) ", app.filter_error.as_ref().unwrap())
-    } else {
-        " Filter (f) ".to_string()
-    };
-
-    let border_style = if app.filter_error.is_some() {
-        Style::default().fg(Color::Red)
-    } else {
-        style
-    };
-
-    let input = Paragraph::new(app.filter_input.as_str())
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .style(style);
-    frame.render_widget(input, area);
-
-    if app.input_mode == InputMode::FilterEdit {
-        frame.set_cursor_position((area.x + app.filter_cursor as u16 + 1, area.y + 1));
-    }
-}
-
-fn draw_highlight_input(frame: &mut Frame, app: &App, area: Rect) {
-    let style = if app.input_mode == InputMode::HighlightEdit {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
-
-    let title = if app.highlight_error.is_some() {
-        format!(
-            " Highlight (Error: {}) ",
-            app.highlight_error.as_ref().unwrap()
-        )
-    } else {
-        " Highlight (h) ".to_string()
-    };
-
-    let border_style = if app.highlight_error.is_some() {
-        Style::default().fg(Color::Red)
-    } else {
-        style
-    };
-
-    let input = Paragraph::new(app.highlight_input.as_str())
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .style(style);
-    frame.render_widget(input, area);
-
-    if app.input_mode == InputMode::HighlightEdit {
-        frame.set_cursor_position((area.x + app.highlight_cursor as u16 + 1, area.y + 1));
+    if is_active {
+        frame.set_cursor_position((area.x + input.cursor as u16 + 1, area.y + 1));
     }
 }
 
@@ -149,9 +101,13 @@ fn draw_log_view(frame: &mut Frame, app: &App, area: Rect) {
 
     let title = format!(
         " Logs [{}/{}] {}{} ",
-        app.filtered_indices.len(),
-        app.lines.len(),
-        if app.follow_tail { "[FOLLOW]" } else { "" },
+        app.log_state.filtered_indices.len(),
+        app.log_state.lines.len(),
+        if app.log_state.follow_tail {
+            "[FOLLOW]"
+        } else {
+            ""
+        },
         if app.wrap_lines { "[WRAP]" } else { "" }
     );
 
@@ -160,27 +116,27 @@ fn draw_log_view(frame: &mut Frame, app: &App, area: Rect) {
         .title(title)
         .border_style(Style::default().fg(Color::Cyan));
 
-    if app.filtered_indices.is_empty() {
+    if app.log_state.filtered_indices.is_empty() {
         let list = List::new(Vec::<ListItem>::new()).block(block);
         frame.render_widget(list, area);
         return;
     }
 
-    let prefix_width = if app.show_time { 9 + 9 } else { 9 };
+    let prefix_width = app.prefix_width();
     let content_width = inner_width.saturating_sub(prefix_width);
-    let bottom_idx = app.get_bottom_line_idx();
+    let bottom_idx = app.log_state.get_bottom_line_idx();
 
     let mut collected_lines: Vec<Line> = Vec::new();
     let mut current_filtered_idx = bottom_idx as i64;
 
     while collected_lines.len() < inner_height && current_filtered_idx >= 0 {
         let filtered_idx = current_filtered_idx as usize;
-        if filtered_idx >= app.filtered_indices.len() {
+        if filtered_idx >= app.log_state.filtered_indices.len() {
             current_filtered_idx -= 1;
             continue;
         }
-        let line_idx = app.filtered_indices[filtered_idx];
-        let log_line = &app.lines[line_idx];
+        let line_idx = app.log_state.filtered_indices[filtered_idx];
+        let log_line = &app.log_state.lines[line_idx];
 
         let mut prefix_spans = Vec::new();
         if app.show_time {
@@ -205,10 +161,7 @@ fn draw_log_view(frame: &mut Frame, app: &App, area: Rect) {
                 if i == 0 {
                     line_spans.extend(prefix_spans.clone());
                 } else {
-                    line_spans.push(Span::styled(
-                        " ".repeat(prefix_width),
-                        Style::default(),
-                    ));
+                    line_spans.push(Span::styled(" ".repeat(prefix_width), Style::default()));
                 }
                 line_spans.extend(wrap_line);
                 line_group.push(Line::from(line_spans));
@@ -239,7 +192,10 @@ fn draw_log_view(frame: &mut Frame, app: &App, area: Rect) {
 
 fn wrap_highlighted(spans: &[(String, Style)], width: usize) -> Vec<Vec<Span<'static>>> {
     if width == 0 {
-        return vec![spans.iter().map(|(t, s)| Span::styled(t.clone(), *s)).collect()];
+        return vec![spans
+            .iter()
+            .map(|(t, s)| Span::styled(t.clone(), *s))
+            .collect()];
     }
 
     let mut result: Vec<Vec<Span<'static>>> = vec![Vec::new()];
@@ -264,7 +220,10 @@ fn wrap_highlighted(spans: &[(String, Style)], width: usize) -> Vec<Vec<Span<'st
 
             let (chunk, rest) = remaining.split_at(byte_end);
             if !chunk.is_empty() {
-                result.last_mut().unwrap().push(Span::styled(chunk.to_string(), *style));
+                result
+                    .last_mut()
+                    .unwrap()
+                    .push(Span::styled(chunk.to_string(), *style));
                 current_width += chunk.chars().count();
             }
             remaining = rest;
@@ -290,17 +249,18 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         )
     };
 
-    let paragraph = Paragraph::new(status).style(Style::default().fg(Color::White).bg(Color::Blue));
+    let paragraph =
+        Paragraph::new(status).style(Style::default().fg(Color::White).bg(Color::Blue));
     frame.render_widget(paragraph, area);
 }
 
 fn draw_help_popup(frame: &mut Frame) {
     let area = frame.area();
     let popup_area = Rect {
-        x: area.width.saturating_sub(40).max(area.x),
+        x: area.width.saturating_sub(HELP_POPUP_WIDTH).max(area.x),
         y: area.y,
-        width: 40.min(area.width),
-        height: 5.min(area.height),
+        width: HELP_POPUP_WIDTH.min(area.width),
+        height: HELP_POPUP_HEIGHT.min(area.height),
     };
 
     let help_text = vec![
@@ -323,9 +283,9 @@ fn draw_help_popup(frame: &mut Frame) {
 }
 
 fn draw_listen_popup(frame: &mut Frame, app: &mut App) {
-    let port = app.listen_port.unwrap_or(0);
-    let interfaces = &app.network_interfaces;
-    let display_mode = app.listen_display_mode;
+    let port = app.listen_state.port.unwrap_or(0);
+    let interfaces = &app.listen_state.network_interfaces;
+    let display_mode = app.listen_state.display_mode;
 
     let mut max_addr_width: usize = 0;
     for iface in interfaces {
@@ -343,7 +303,7 @@ fn draw_listen_popup(frame: &mut Frame, app: &mut App) {
     let max_content_width = max_addr_width.max(header_width);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut addr_entries: Vec<crate::app::ListenAddrEntry> = Vec::new();
+    let mut addr_entries: Vec<ListenAddrEntry> = Vec::new();
 
     lines.push(Line::from(vec![
         Span::styled("Listening on port ", Style::default().fg(Color::White)),
@@ -352,8 +312,8 @@ fn draw_listen_popup(frame: &mut Frame, app: &mut App) {
     lines.push(Line::from(""));
 
     let mode_str = match display_mode {
-        crate::app::ListenDisplayMode::AddrPort => "[addr:port]  nc command ",
-        crate::app::ListenDisplayMode::NcCommand => " addr:port  [nc command]",
+        ListenDisplayMode::AddrPort => "[addr:port]  nc command ",
+        ListenDisplayMode::NcCommand => " addr:port  [nc command]",
     };
     lines.push(Line::from(vec![
         Span::styled("Mode (Tab): ", Style::default().fg(Color::Gray)),
@@ -381,16 +341,17 @@ fn draw_listen_popup(frame: &mut Frame, app: &mut App) {
 
             let suffix = if iface.is_default { " (default)" } else { "" };
 
-            lines.push(Line::from(vec![
-                Span::styled(format!("{}{}", iface.name, suffix), name_style),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                format!("{}{}", iface.name, suffix),
+                name_style,
+            )]));
 
             for addr_info in &iface.addresses {
                 let is_v6 = addr_info.ip.is_ipv6();
-                let is_selected = addr_idx == app.listen_selected_idx;
+                let is_selected = addr_idx == app.listen_state.selected_idx;
                 let current_row = lines.len() as u16 + 1;
 
-                addr_entries.push(crate::app::ListenAddrEntry {
+                addr_entries.push(ListenAddrEntry {
                     ip: addr_info.ip,
                     is_v6,
                     is_self_assigned: addr_info.is_self_assigned,
@@ -437,29 +398,34 @@ fn draw_listen_popup(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Clear, popup_area);
     frame.render_widget(popup, popup_area);
 
-    app.listen_addr_list = addr_entries;
-    app.listen_popup_area = Some((popup_area.x, popup_area.y, popup_area.width, popup_area.height));
+    app.listen_state.addr_list = addr_entries;
+    app.listen_state.popup_area = Some((
+        popup_area.x,
+        popup_area.y,
+        popup_area.width,
+        popup_area.height,
+    ));
 }
 
 fn calc_addr_line_width(
     ip: &std::net::IpAddr,
     port: u16,
     is_v6: bool,
-    display_mode: crate::app::ListenDisplayMode,
+    display_mode: ListenDisplayMode,
 ) -> usize {
     let prefix_len = 2;
     let ip_str = ip.to_string();
     let port_str = port.to_string();
 
     match display_mode {
-        crate::app::ListenDisplayMode::AddrPort => {
+        ListenDisplayMode::AddrPort => {
             if is_v6 {
                 prefix_len + 1 + ip_str.len() + 1 + 1 + port_str.len()
             } else {
                 prefix_len + ip_str.len() + 1 + port_str.len()
             }
         }
-        crate::app::ListenDisplayMode::NcCommand => {
+        ListenDisplayMode::NcCommand => {
             if is_v6 {
                 prefix_len + 3 + 3 + ip_str.len() + 1 + port_str.len()
             } else {
@@ -475,7 +441,7 @@ fn build_addr_line<'a>(
     is_v6: bool,
     is_self_assigned: bool,
     is_selected: bool,
-    display_mode: crate::app::ListenDisplayMode,
+    display_mode: ListenDisplayMode,
 ) -> Line<'a> {
     let base_addr_style = if is_self_assigned {
         Style::default().fg(Color::DarkGray)
@@ -499,7 +465,7 @@ fn build_addr_line<'a>(
     };
 
     match display_mode {
-        crate::app::ListenDisplayMode::AddrPort => {
+        ListenDisplayMode::AddrPort => {
             if is_v6 {
                 Line::from(vec![
                     Span::styled(prefix, prefix_style),
@@ -516,7 +482,7 @@ fn build_addr_line<'a>(
                 ])
             }
         }
-        crate::app::ListenDisplayMode::NcCommand => {
+        ListenDisplayMode::NcCommand => {
             if is_v6 {
                 Line::from(vec![
                     Span::styled(prefix, prefix_style),
@@ -539,8 +505,8 @@ fn build_addr_line<'a>(
 
 fn draw_quit_confirm(frame: &mut Frame) {
     let area = frame.area();
-    let popup_width = 40.min(area.width.saturating_sub(4));
-    let popup_height = 5.min(area.height.saturating_sub(4));
+    let popup_width = QUIT_POPUP_WIDTH.min(area.width.saturating_sub(4));
+    let popup_height = QUIT_POPUP_HEIGHT.min(area.height.saturating_sub(4));
 
     let popup_area = Rect {
         x: area.width.saturating_sub(popup_width) / 2,

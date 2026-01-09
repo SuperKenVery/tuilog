@@ -1,6 +1,8 @@
 mod app;
+mod constants;
 mod filter;
 mod highlight;
+mod input;
 mod netinfo;
 mod source;
 mod state;
@@ -9,10 +11,11 @@ mod ui;
 use anyhow::Result;
 use app::{App, InputMode};
 use clap::Parser;
+use constants::POLL_INTERVAL_MS;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
-        MouseButton, MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -31,7 +34,11 @@ struct Cli {
     #[arg(help = "Log file to view (reads from stdin if not provided)")]
     file: Option<PathBuf>,
 
-    #[arg(short = 'l', long = "listen", help = "Listen on TCP port for incoming logs")]
+    #[arg(
+        short = 'l',
+        long = "listen",
+        help = "Listen on TCP port for incoming logs"
+    )]
     port: Option<u16>,
 }
 
@@ -88,16 +95,16 @@ fn run_app(
 
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(POLL_INTERVAL_MS))? {
             let ev = event::read()?;
 
             if let Event::Mouse(mouse) = &ev {
-                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                    if app.show_listen_popup() {
-                        if let Some(text) = app.handle_listen_popup_click(mouse.column, mouse.row) {
-                            copy_to_clipboard(&text);
-                            app.status_message = Some(format!("Copied: {}", text));
-                        }
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                    && app.listen_state.show_popup()
+                {
+                    if let Some(text) = app.listen_state.handle_click(mouse.column, mouse.row) {
+                        copy_to_clipboard(&text);
+                        app.status_message = Some(format!("Copied: {}", text));
                     }
                 }
             }
@@ -106,223 +113,88 @@ fn run_app(
                 app.status_message = None;
 
                 if app.show_quit_confirm {
-                    match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') => return Ok(()),
-                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
-                            app.show_quit_confirm = false;
-                        }
-                        _ => {}
-                    }
+                    handle_quit_confirm(&mut app, key.code)?;
                     continue;
                 }
 
-                if app.show_listen_popup() {
-                    match key.code {
-                        KeyCode::Char('q') => app.show_quit_confirm = true,
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.show_quit_confirm = true
-                        }
-                        KeyCode::Tab => app.toggle_listen_display_mode(),
-                        KeyCode::Up | KeyCode::Char('k') => app.listen_select_prev(),
-                        KeyCode::Down | KeyCode::Char('j') => app.listen_select_next(),
-                        KeyCode::Enter => {
-                            if let Some(text) = app.get_selected_copy_text() {
-                                copy_to_clipboard(&text);
-                                app.status_message = Some(format!("Copied: {}", text));
-                            }
-                        }
-                        _ => {}
-                    }
+                if app.listen_state.show_popup() {
+                    handle_listen_popup(&mut app, key.code, key.modifiers);
                     continue;
                 }
 
                 match app.input_mode {
-                    InputMode::Normal => match key.code {
-                        KeyCode::Char('q') => app.show_quit_confirm = true,
-                        KeyCode::Char('c')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
-                            app.show_quit_confirm = true
+                    InputMode::Normal => {
+                        handle_normal_mode(&mut app, key.code, key.modifiers, visible_height)?
+                    }
+                    _ => {
+                        if app.handle_input_key(key.code) {
+                            app.apply_current_input();
                         }
-                        KeyCode::Char('d') => app.input_mode = InputMode::HideEdit,
-                        KeyCode::Char('f') => app.input_mode = InputMode::FilterEdit,
-                        KeyCode::Char('h') => app.input_mode = InputMode::HighlightEdit,
-                        KeyCode::Char('c') => app.clear(),
-                        KeyCode::Char('t') => app.toggle_time(),
-                        KeyCode::Char('w') => app.toggle_wrap(),
-                        KeyCode::Char('g') => app.scroll_to_start(visible_height),
-                        KeyCode::Char('G') => app.scroll_to_end(visible_height),
-                        KeyCode::Up | KeyCode::Char('k') => app.scroll_up(1, visible_height),
-                        KeyCode::Down | KeyCode::Char('j') => app.scroll_down(1, visible_height),
-                        KeyCode::PageUp => app.scroll_up(visible_height, visible_height),
-                        KeyCode::PageDown => app.scroll_down(visible_height, visible_height),
-                        KeyCode::Home => app.scroll_to_start(visible_height),
-                        KeyCode::End => app.scroll_to_end(visible_height),
-                        _ => {}
-                    },
-                    InputMode::HideEdit => match key.code {
-                        KeyCode::Enter => {
-                            app.apply_hide();
-                            if app.hide_error.is_none() {
-                                app.input_mode = InputMode::Normal;
-                            }
-                        }
-                        KeyCode::Esc => app.input_mode = InputMode::Normal,
-                        KeyCode::Left => {
-                            app.hide_cursor = app.hide_cursor.saturating_sub(1);
-                        }
-                        KeyCode::Right => {
-                            let len = app.hide_input.chars().count();
-                            if app.hide_cursor < len {
-                                app.hide_cursor += 1;
-                            }
-                        }
-                        KeyCode::Home => {
-                            app.hide_cursor = 0;
-                        }
-                        KeyCode::End => {
-                            app.hide_cursor = app.hide_input.chars().count();
-                        }
-                        KeyCode::Char(c) => {
-                            let byte_idx = app.hide_input.char_indices()
-                                .nth(app.hide_cursor)
-                                .map(|(i, _)| i)
-                                .unwrap_or(app.hide_input.len());
-                            app.hide_input.insert(byte_idx, c);
-                            app.hide_cursor += 1;
-                        }
-                        KeyCode::Backspace => {
-                            if app.hide_cursor > 0 {
-                                let byte_idx = app.hide_input.char_indices()
-                                    .nth(app.hide_cursor - 1)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(0);
-                                app.hide_input.remove(byte_idx);
-                                app.hide_cursor -= 1;
-                            }
-                        }
-                        KeyCode::Delete => {
-                            let len = app.hide_input.chars().count();
-                            if app.hide_cursor < len {
-                                let byte_idx = app.hide_input.char_indices()
-                                    .nth(app.hide_cursor)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(app.hide_input.len());
-                                app.hide_input.remove(byte_idx);
-                            }
-                        }
-                        _ => {}
-                    },
-                    InputMode::FilterEdit => match key.code {
-                        KeyCode::Enter => {
-                            app.apply_filter();
-                            if app.filter_error.is_none() {
-                                app.input_mode = InputMode::Normal;
-                            }
-                        }
-                        KeyCode::Esc => app.input_mode = InputMode::Normal,
-                        KeyCode::Left => {
-                            app.filter_cursor = app.filter_cursor.saturating_sub(1);
-                        }
-                        KeyCode::Right => {
-                            let len = app.filter_input.chars().count();
-                            if app.filter_cursor < len {
-                                app.filter_cursor += 1;
-                            }
-                        }
-                        KeyCode::Home => {
-                            app.filter_cursor = 0;
-                        }
-                        KeyCode::End => {
-                            app.filter_cursor = app.filter_input.chars().count();
-                        }
-                        KeyCode::Char(c) => {
-                            let byte_idx = app.filter_input.char_indices()
-                                .nth(app.filter_cursor)
-                                .map(|(i, _)| i)
-                                .unwrap_or(app.filter_input.len());
-                            app.filter_input.insert(byte_idx, c);
-                            app.filter_cursor += 1;
-                        }
-                        KeyCode::Backspace => {
-                            if app.filter_cursor > 0 {
-                                let byte_idx = app.filter_input.char_indices()
-                                    .nth(app.filter_cursor - 1)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(0);
-                                app.filter_input.remove(byte_idx);
-                                app.filter_cursor -= 1;
-                            }
-                        }
-                        KeyCode::Delete => {
-                            let len = app.filter_input.chars().count();
-                            if app.filter_cursor < len {
-                                let byte_idx = app.filter_input.char_indices()
-                                    .nth(app.filter_cursor)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(app.filter_input.len());
-                                app.filter_input.remove(byte_idx);
-                            }
-                        }
-                        _ => {}
-                    },
-                    InputMode::HighlightEdit => match key.code {
-                        KeyCode::Enter => {
-                            app.apply_highlight();
-                            if app.highlight_error.is_none() {
-                                app.input_mode = InputMode::Normal;
-                            }
-                        }
-                        KeyCode::Esc => app.input_mode = InputMode::Normal,
-                        KeyCode::Left => {
-                            app.highlight_cursor = app.highlight_cursor.saturating_sub(1);
-                        }
-                        KeyCode::Right => {
-                            let len = app.highlight_input.chars().count();
-                            if app.highlight_cursor < len {
-                                app.highlight_cursor += 1;
-                            }
-                        }
-                        KeyCode::Home => {
-                            app.highlight_cursor = 0;
-                        }
-                        KeyCode::End => {
-                            app.highlight_cursor = app.highlight_input.chars().count();
-                        }
-                        KeyCode::Char(c) => {
-                            let byte_idx = app.highlight_input.char_indices()
-                                .nth(app.highlight_cursor)
-                                .map(|(i, _)| i)
-                                .unwrap_or(app.highlight_input.len());
-                            app.highlight_input.insert(byte_idx, c);
-                            app.highlight_cursor += 1;
-                        }
-                        KeyCode::Backspace => {
-                            if app.highlight_cursor > 0 {
-                                let byte_idx = app.highlight_input.char_indices()
-                                    .nth(app.highlight_cursor - 1)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(0);
-                                app.highlight_input.remove(byte_idx);
-                                app.highlight_cursor -= 1;
-                            }
-                        }
-                        KeyCode::Delete => {
-                            let len = app.highlight_input.chars().count();
-                            if app.highlight_cursor < len {
-                                let byte_idx = app.highlight_input.char_indices()
-                                    .nth(app.highlight_cursor)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(app.highlight_input.len());
-                                app.highlight_input.remove(byte_idx);
-                            }
-                        }
-                        _ => {}
-                    },
+                    }
                 }
             }
         }
     }
+}
+
+fn handle_quit_confirm(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => std::process::exit(0),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_quit_confirm = false;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_listen_popup(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
+    match key_code {
+        KeyCode::Char('q') => app.show_quit_confirm = true,
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.show_quit_confirm = true
+        }
+        KeyCode::Tab => app.listen_state.toggle_display_mode(),
+        KeyCode::Up | KeyCode::Char('k') => app.listen_state.select_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.listen_state.select_next(),
+        KeyCode::Enter => {
+            if let Some(text) = app.listen_state.get_selected_copy_text() {
+                copy_to_clipboard(&text);
+                app.status_message = Some(format!("Copied: {}", text));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_normal_mode(
+    app: &mut App,
+    key_code: KeyCode,
+    modifiers: KeyModifiers,
+    visible_height: usize,
+) -> Result<()> {
+    match key_code {
+        KeyCode::Char('q') => app.show_quit_confirm = true,
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.show_quit_confirm = true
+        }
+        KeyCode::Char('d') => app.input_mode = InputMode::HideEdit,
+        KeyCode::Char('f') => app.input_mode = InputMode::FilterEdit,
+        KeyCode::Char('h') => app.input_mode = InputMode::HighlightEdit,
+        KeyCode::Char('c') => app.clear(),
+        KeyCode::Char('t') => app.toggle_time(),
+        KeyCode::Char('w') => app.toggle_wrap(),
+        KeyCode::Char('g') => app.log_state.scroll_to_start(),
+        KeyCode::Char('G') => app.log_state.scroll_to_end(),
+        KeyCode::Up | KeyCode::Char('k') => app.log_state.scroll_up(1),
+        KeyCode::Down | KeyCode::Char('j') => app.log_state.scroll_down(1),
+        KeyCode::PageUp => app.log_state.scroll_up(visible_height),
+        KeyCode::PageDown => app.log_state.scroll_down(visible_height),
+        KeyCode::Home => app.log_state.scroll_to_start(),
+        KeyCode::End => app.log_state.scroll_to_end(),
+        _ => {}
+    }
+    Ok(())
 }
 
 fn copy_to_clipboard(text: &str) {
@@ -330,10 +202,7 @@ fn copy_to_clipboard(text: &str) {
     {
         use std::io::Write;
         use std::process::{Command, Stdio};
-        if let Ok(mut child) = Command::new("pbcopy")
-            .stdin(Stdio::piped())
-            .spawn()
-        {
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
             if let Some(stdin) = child.stdin.as_mut() {
                 let _ = stdin.write_all(text.as_bytes());
             }
@@ -369,10 +238,7 @@ fn copy_to_clipboard(text: &str) {
     {
         use std::io::Write;
         use std::process::{Command, Stdio};
-        if let Ok(mut child) = Command::new("clip")
-            .stdin(Stdio::piped())
-            .spawn()
-        {
+        if let Ok(mut child) = Command::new("clip").stdin(Stdio::piped()).spawn() {
             if let Some(stdin) = child.stdin.as_mut() {
                 let _ = stdin.write_all(text.as_bytes());
             }
