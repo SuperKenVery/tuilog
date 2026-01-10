@@ -4135,6 +4135,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tracing",
  "windows 0.58.0",
 ]
 

@@ -30,6 +30,7 @@ nix = { version = "0.29", features = ["net"] }
 dioxus = { version = "0.7.2", optional = true, features = ["desktop"] }
 dioxus-native = { version = "0.7", optional = true }
 async-std = { version = "1.12", optional = true }
+tracing = "0.1.44"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_Ndis"] }

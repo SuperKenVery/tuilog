@@ -27,8 +27,7 @@
       );
 
     rustToolchain = eachSystem (pkgs: pkgs.rust-bin.stable.latest.default.override {
-      extensions = ["rust-src" "rust-analyzer"];
-      targets = ["wasm32-unknown-unknown"];
+      extensions = ["rust-analyzer" "rust-src"];
     });
 
     dioxus-cli = eachSystem (pkgs: pkgs.dioxus-cli.overrideAttrs (oldAttrs: {

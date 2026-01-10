@@ -5,6 +5,7 @@ use crate::highlight::{apply_highlights, highlight_line};
 use crate::source::SourceEvent;
 use crate::state::AppState;
 use crossterm::event::KeyCode;
+use dioxus::logger::tracing;
 use fancy_regex::Regex;
 use std::sync::mpsc::Receiver;
 
@@ -268,7 +269,12 @@ impl App {
 
     pub fn render_line(&self, line: &LogLine) -> Vec<(String, ratatui::style::Style)> {
         let content = self.get_display_content(line);
-        let spans = highlight_line(&content, self.filter_state.highlight_expr.as_ref(), true, true);
+        let spans = highlight_line(
+            &content,
+            self.filter_state.highlight_expr.as_ref(),
+            true,
+            true,
+        );
         apply_highlights(&content, &spans)
     }
 

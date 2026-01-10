@@ -2,13 +2,14 @@ use crate::core::{FilterState, LogLine};
 use crate::filter::{parse_filter, FilterExpr};
 use crate::source::{start_source, LogSource, SourceEvent};
 use crate::state::AppState;
-use dioxus::prelude::*;
 use dioxus::html::geometry::WheelDelta;
+use dioxus::prelude::*;
 use fancy_regex::Regex;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::info;
 
 const BATCH_SIZE: usize = 100;
 const UPDATE_INTERVAL_MS: u64 = 16;
@@ -51,7 +52,17 @@ impl GuiAppState {
             container_height: 600.0,
             version: 0,
         };
-        if !s.highlight_text.is_empty() {
+        if !s.hide_text.trim().is_empty() {
+            if let Ok(re) = Regex::new(&s.hide_text) {
+                s.filter_state.hide_regex = Some(re);
+            }
+        }
+        if !s.filter_text.trim().is_empty() {
+            if let Ok(expr) = parse_filter(&s.filter_text) {
+                s.filter_state.filter_expr = Some(expr);
+            }
+        }
+        if !s.highlight_text.trim().is_empty() {
             if let Ok(expr) = parse_filter(&s.highlight_text) {
                 s.filter_state.highlight_expr = Some(expr);
             }
@@ -155,7 +166,10 @@ impl GuiAppState {
 
     pub fn add_line(&mut self, content: String) {
         let line = LogLine {
-            content: content.trim_end_matches('\n').trim_end_matches('\r').to_string(),
+            content: content
+                .trim_end_matches('\n')
+                .trim_end_matches('\r')
+                .to_string(),
             timestamp: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
         };
         let idx = self.lines.len();
@@ -233,7 +247,7 @@ fn highlight_content(content: &str, highlight_expr: &Option<FilterExpr>) -> Vec<
 
 #[component]
 pub fn GuiApp(props: GuiAppProps) -> Element {
-    let mut app_state = use_signal(GuiAppState::new);
+    let mut app_state = use_signal(|| GuiAppState::new());
     let mut source_rx: Signal<Option<Arc<Mutex<Receiver<SourceEvent>>>>> = use_signal(|| None);
 
     use_effect({
@@ -273,8 +287,7 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                                 pending_lines.push(content);
                             }
                             Ok(SourceEvent::Error(e)) => {
-                                app_state.write().status_message =
-                                    Some(format!("Error: {}", e));
+                                app_state.write().status_message = Some(format!("Error: {}", e));
                             }
                             Ok(SourceEvent::Connected(peer)) => {
                                 app_state.write().status_message =
@@ -334,18 +347,23 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
         (start_idx..end_idx)
             .enumerate()
             .filter_map(|(view_idx, filter_idx)| {
-                state.filtered_indices.get(filter_idx).and_then(|&line_idx| {
-                    state.lines.get(line_idx).map(|line| {
-                        let content = state.get_display_content(line);
-                        (view_idx, line_idx, line.clone(), content)
+                state
+                    .filtered_indices
+                    .get(filter_idx)
+                    .and_then(|&line_idx| {
+                        state.lines.get(line_idx).map(|line| {
+                            let content = state.get_display_content(line);
+                            (view_idx, line_idx, line.clone(), content)
+                        })
                     })
-                })
             })
             .collect()
     };
 
     let scroll_thumb_height = if total_height > 0.0 {
-        (container_height / total_height * container_height).max(30.0).min(container_height)
+        (container_height / total_height * container_height)
+            .max(30.0)
+            .min(container_height)
     } else {
         container_height
     };
