@@ -1,9 +1,29 @@
-use chrono::Local;
+use chrono::{DateTime, Local};
 
 #[derive(Clone, PartialEq)]
 pub struct LogLine {
-    pub timestamp: String,
+    pub timestamp: DateTime<Local>,
     pub content: String,
+}
+
+pub fn format_relative_time(timestamp: DateTime<Local>) -> String {
+    let now = Local::now();
+    let duration = now.signed_duration_since(timestamp);
+    
+    let total_secs = duration.num_seconds();
+    if total_secs < 0 {
+        return "+0s".to_string();
+    }
+    
+    if total_secs < 60 {
+        format!("-{}s", total_secs)
+    } else if total_secs < 3600 {
+        format!("-{}m", total_secs / 60)
+    } else if total_secs < 86400 {
+        format!("-{}h", total_secs / 3600)
+    } else {
+        format!("-{}d", total_secs / 86400)
+    }
 }
 
 #[derive(Clone)]
@@ -28,7 +48,7 @@ impl Default for LogState {
 impl LogState {
     pub fn add_line(&mut self, content: String) -> usize {
         let line = LogLine {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            timestamp: Local::now(),
             content,
         };
         let idx = self.lines.len();

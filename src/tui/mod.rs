@@ -3,7 +3,7 @@ use crate::constants::{
     HELP_POPUP_HEIGHT, HELP_POPUP_WIDTH, INPUT_FIELD_HEIGHT, QUIT_POPUP_HEIGHT, QUIT_POPUP_WIDTH,
     STATUS_BAR_HEIGHT,
 };
-use crate::core::{InputMode, ListenAddrEntry, ListenDisplayMode};
+use crate::core::{format_relative_time, InputMode, ListenAddrEntry, ListenDisplayMode};
 use crate::input::TextInput;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -142,7 +142,7 @@ fn draw_log_view(frame: &mut Frame, app: &App, area: Rect) {
         let mut prefix_spans = Vec::new();
         if app.show_time {
             prefix_spans.push(Span::styled(
-                format!("{} ", log_line.timestamp),
+                format!("{:>6} ", format_relative_time(log_line.timestamp)),
                 Style::default().fg(Color::DarkGray),
             ));
         }

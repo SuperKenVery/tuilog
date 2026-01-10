@@ -54,6 +54,7 @@ pub struct Span {
     pub start: usize,
     pub end: usize,
     pub style: Style,
+    pub priority: u8,
 }
 
 pub fn highlight_line(
@@ -74,6 +75,7 @@ pub fn highlight_line(
                     .bg(Color::Yellow)
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
+                priority: 100,
             });
         }
     }
@@ -91,12 +93,15 @@ pub fn highlight_line(
                     start: m.start(),
                     end: m.end(),
                     style: rule.style,
+                    priority: 10,
                 });
             }
         }
     }
 
-    spans.sort_by_key(|s| s.start);
+    spans.sort_by(|a, b| {
+        a.start.cmp(&b.start).then(b.priority.cmp(&a.priority))
+    });
     spans
 }
 
@@ -105,24 +110,32 @@ pub fn apply_highlights(text: &str, spans: &[Span]) -> Vec<(String, Style)> {
         return vec![(text.to_string(), Style::default())];
     }
 
-    let mut result = Vec::new();
-    let mut pos = 0;
-
+    let mut style_at: Vec<(Style, u8)> = vec![(Style::default(), 0); text.len()];
+    
     for span in spans {
         let start = char_to_byte_pos(text, span.start);
-        let end = char_to_byte_pos(text, span.end);
-
-        if start > pos {
-            result.push((text[pos..start].to_string(), Style::default()));
-        }
-        if end > start && end <= text.len() {
-            result.push((text[start..end].to_string(), span.style));
-            pos = end;
+        let end = char_to_byte_pos(text, span.end).min(text.len());
+        
+        for i in start..end {
+            if span.priority >= style_at[i].1 {
+                style_at[i] = (span.style, span.priority);
+            }
         }
     }
 
-    if pos < text.len() {
-        result.push((text[pos..].to_string(), Style::default()));
+    let mut result = Vec::new();
+    let mut pos = 0;
+    
+    while pos < text.len() {
+        let current_style = style_at[pos].0;
+        let mut end = pos + 1;
+        
+        while end < text.len() && style_at[end].0 == current_style {
+            end += 1;
+        }
+        
+        result.push((text[pos..end].to_string(), current_style));
+        pos = end;
     }
 
     result
@@ -183,6 +196,7 @@ fn highlight_json_value(text: &str, value: &Value, base_offset: usize, spans: &m
                         start: base_offset + key_pos,
                         end: base_offset + key_pos + key.len() + 2,
                         style: Style::default().fg(Color::Cyan),
+                        priority: 50,
                     });
                 }
                 highlight_json_value(text, val, base_offset, spans);
@@ -199,6 +213,7 @@ fn highlight_json_value(text: &str, value: &Value, base_offset: usize, spans: &m
                     start: base_offset + pos,
                     end: base_offset + pos + s.len() + 2,
                     style: Style::default().fg(Color::Green),
+                    priority: 50,
                 });
             }
         }
@@ -209,6 +224,7 @@ fn highlight_json_value(text: &str, value: &Value, base_offset: usize, spans: &m
                     start: base_offset + pos,
                     end: base_offset + pos + n_str.len(),
                     style: Style::default().fg(Color::Yellow),
+                    priority: 50,
                 });
             }
         }
@@ -219,6 +235,7 @@ fn highlight_json_value(text: &str, value: &Value, base_offset: usize, spans: &m
                     start: base_offset + pos,
                     end: base_offset + pos + b_str.len(),
                     style: Style::default().fg(Color::Magenta),
+                    priority: 50,
                 });
             }
         }
@@ -228,6 +245,7 @@ fn highlight_json_value(text: &str, value: &Value, base_offset: usize, spans: &m
                     start: base_offset + pos,
                     end: base_offset + pos + 4,
                     style: Style::default().fg(Color::Red),
+                    priority: 50,
                 });
             }
         }

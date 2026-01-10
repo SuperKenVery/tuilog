@@ -1,4 +1,4 @@
-pub const TIMESTAMP_WIDTH: usize = 9;
+pub const TIMESTAMP_WIDTH: usize = 7;
 pub const LINE_NUMBER_WIDTH: usize = 9;
 pub const PREFIX_WIDTH_WITH_TIME: usize = TIMESTAMP_WIDTH + LINE_NUMBER_WIDTH;
 pub const PREFIX_WIDTH_WITHOUT_TIME: usize = LINE_NUMBER_WIDTH;

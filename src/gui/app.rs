@@ -1,4 +1,4 @@
-use crate::core::{FilterState, LogLine};
+use crate::core::{format_relative_time, FilterState, LogLine};
 use crate::filter::{parse_filter, FilterExpr};
 use crate::source::{start_source, LogSource, SourceEvent};
 use crate::state::AppState;
@@ -171,7 +171,7 @@ impl GuiAppState {
                 .trim_end_matches('\n')
                 .trim_end_matches('\r')
                 .to_string(),
-            timestamp: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+            timestamp: chrono::Local::now(),
         };
         let idx = self.lines.len();
         let matches = self.matches_filter(&line);
@@ -296,64 +296,29 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
         let mut current_threshold_ms: f64 = BASE_RENDER_THRESHOLD_MS;
 
         loop {
-            let should_render = if let Some(last_time) = last_data_time {
-                !pending_lines.is_empty()
-                    && last_time.elapsed()
-                        >= Duration::from_micros((current_threshold_ms * 1000.0) as u64)
-            } else {
-                false
-            };
-
-            if should_render {
-                let lines_to_add: Vec<String> = pending_lines.drain(..).collect();
-                let mut state = app_state.write();
-                let was_at_bottom = state.follow_tail;
-                for line in lines_to_add {
-                    state.add_line(line);
-                }
-                if was_at_bottom {
-                    state.scroll_to_bottom();
-                }
-                state.version += 1;
-                drop(state);
-
-                last_data_time = None;
-                current_threshold_ms = BASE_RENDER_THRESHOLD_MS;
-                continue;
-            }
-
-            let wait_duration = if let Some(last_time) = last_data_time {
+            if let Some(last_time) = last_data_time {
                 let threshold = Duration::from_micros((current_threshold_ms * 1000.0) as u64);
-                threshold.saturating_sub(last_time.elapsed())
-            } else {
-                Duration::from_millis(100)
-            };
+                let wait_duration = threshold.saturating_sub(last_time.elapsed());
 
-            match async_std::future::timeout(wait_duration, rx.recv()).await {
-                Ok(Ok(event)) => {
-                    match event {
-                        SourceEvent::Line(content) => {
-                            pending_lines.push(content);
-                            if last_data_time.is_none() {
-                                last_data_time = Some(Instant::now());
+                match async_std::future::timeout(wait_duration, rx.recv()).await {
+                    Ok(Ok(event)) => {
+                        match event {
+                            SourceEvent::Line(content) => {
+                                pending_lines.push(content);
+                                current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
+                                    .max(MIN_RENDER_THRESHOLD_MS);
                             }
-                            current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
-                                .max(MIN_RENDER_THRESHOLD_MS);
-                        }
-                        SourceEvent::Error(e) => {
-                            app_state.write().status_message = Some(format!("Error: {}", e));
-                        }
-                        SourceEvent::Connected(peer) => {
-                            app_state.write().status_message =
-                                Some(format!("Connected: {}", peer));
+                            SourceEvent::Error(e) => {
+                                app_state.write().status_message = Some(format!("Error: {}", e));
+                            }
+                            SourceEvent::Connected(peer) => {
+                                app_state.write().status_message =
+                                    Some(format!("Connected: {}", peer));
+                            }
                         }
                     }
-                }
-                Ok(Err(_)) => {
-                    break;
-                }
-                Err(_) => {
-                    if !pending_lines.is_empty() {
+                    Ok(Err(_)) => break,
+                    Err(_) => {
                         let lines_to_add: Vec<String> = pending_lines.drain(..).collect();
                         let mut state = app_state.write();
                         let was_at_bottom = state.follow_tail;
@@ -370,6 +335,36 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                         current_threshold_ms = BASE_RENDER_THRESHOLD_MS;
                     }
                 }
+            } else {
+                match rx.recv().await {
+                    Ok(event) => {
+                        match event {
+                            SourceEvent::Line(content) => {
+                                pending_lines.push(content);
+                                last_data_time = Some(Instant::now());
+                                current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
+                                    .max(MIN_RENDER_THRESHOLD_MS);
+                            }
+                            SourceEvent::Error(e) => {
+                                app_state.write().status_message = Some(format!("Error: {}", e));
+                            }
+                            SourceEvent::Connected(peer) => {
+                                app_state.write().status_message =
+                                    Some(format!("Connected: {}", peer));
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    });
+
+    use_future(move || async move {
+        loop {
+            async_std::task::sleep(Duration::from_secs(1)).await;
+            if app_state.read().show_time {
+                app_state.write().version += 1;
             }
         }
     });
@@ -574,7 +569,7 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                                 class: "log-line",
                                 key: "{line_idx}",
                                 if show_time {
-                                    span { class: "timestamp", "{line.timestamp}" }
+                                    span { class: "timestamp", "{format_relative_time(line.timestamp)}" }
                                 }
                                 span { class: "line-num", "{line_idx + 1}" }
                                 span { class: "content",
