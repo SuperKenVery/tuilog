@@ -1,85 +1,196 @@
 use crate::core::{format_relative_time, FilterState, LogLine};
-use crate::filter::{parse_filter, FilterExpr};
+use crate::filter::parse_filter;
 use crate::source::{start_source, LogSource, SourceEvent};
 use crate::state::AppState;
-use async_channel::Receiver;
-use dioxus::html::geometry::WheelDelta;
-use dioxus::prelude::*;
 use fancy_regex::Regex;
+use gpui::{
+    actions, div, prelude::*, px, rgb, rgba, size, App, Application, Context, FocusHandle,
+    Focusable, InteractiveElement, KeyBinding, ParentElement, Pixels, Render, ScrollStrategy,
+    SharedString, Size, StatefulInteractiveElement, Styled, TitlebarOptions, Window, WindowBounds,
+    WindowOptions,
+};
+use gpui_component::{v_virtual_list, VirtualListScrollHandle};
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::rc::Rc;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
-const LINE_HEIGHT: f64 = 20.0;
+actions!(
+    log_viewer,
+    [
+        ScrollUp,
+        ScrollDown,
+        ScrollPageUp,
+        ScrollPageDown,
+        ScrollToTop,
+        ScrollToBottom,
+        ToggleFollow,
+        ToggleTime,
+        ClearLogs,
+        Quit,
+    ]
+);
 
-const BASE_RENDER_THRESHOLD_MS: f64 = 50.0;
-const MIN_RENDER_THRESHOLD_MS: f64 = 5.0;
-const THRESHOLD_DECAY_FACTOR: f64 = 0.7;
+const LINE_HEIGHT: f32 = 20.0;
 
-#[derive(Clone)]
-pub struct GuiAppState {
-    pub lines: Vec<LogLine>,
-    pub filtered_indices: Vec<usize>,
-    pub filter_state: FilterState,
-    pub follow_tail: bool,
-    pub show_time: bool,
-    pub hide_text: String,
-    pub filter_text: String,
-    pub highlight_text: String,
-    pub hide_error: Option<String>,
-    pub filter_error: Option<String>,
-    pub status_message: Option<String>,
-    pub scroll_y: f64,
-    pub container_height: f64,
-    pub version: u64,
+pub struct LogViewer {
+    lines: Vec<LogLine>,
+    filtered_indices: Vec<usize>,
+    filter_state: FilterState,
+
+    hide_input: String,
+    filter_input: String,
+    highlight_input: String,
+
+    scroll_handle: VirtualListScrollHandle,
+    item_sizes: Rc<Vec<Size<Pixels>>>,
+    follow_tail: bool,
+    show_time: bool,
+    status_message: Option<String>,
+
+    focus_handle: FocusHandle,
 }
 
-impl GuiAppState {
-    pub fn new() -> Self {
-        let state = AppState::load();
-        let mut s = Self {
+impl LogViewer {
+    pub fn new(
+        file: Option<PathBuf>,
+        port: Option<u16>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let persisted = AppState::load();
+
+        let mut viewer = Self {
             lines: Vec::new(),
             filtered_indices: Vec::new(),
             filter_state: FilterState::default(),
+            hide_input: persisted.hide_input.clone(),
+            filter_input: persisted.filter_input.clone(),
+            highlight_input: persisted.highlight_input.clone(),
+            scroll_handle: VirtualListScrollHandle::new(),
+            item_sizes: Rc::new(Vec::new()),
             follow_tail: true,
             show_time: true,
-            hide_text: state.hide_input.clone(),
-            filter_text: state.filter_input.clone(),
-            highlight_text: state.highlight_input.clone(),
-            hide_error: None,
-            filter_error: None,
             status_message: None,
-            scroll_y: 0.0,
-            container_height: 600.0,
-            version: 0,
+            focus_handle: cx.focus_handle(),
         };
-        if !s.hide_text.trim().is_empty() {
-            if let Ok(re) = Regex::new(&s.hide_text) {
-                s.filter_state.hide_regex = Some(re);
-            }
-        }
-        if !s.filter_text.trim().is_empty() {
-            if let Ok(expr) = parse_filter(&s.filter_text) {
-                s.filter_state.filter_expr = Some(expr);
-            }
-        }
-        if !s.highlight_text.trim().is_empty() {
-            if let Ok(expr) = parse_filter(&s.highlight_text) {
-                s.filter_state.highlight_expr = Some(expr);
-            }
-        }
-        s
-    }
 
-    pub fn get_display_content(&self, line: &LogLine) -> String {
-        match &self.filter_state.hide_regex {
-            Some(re) => {
-                let content = &line.content;
-                match re.replace_all(content, "") {
-                    std::borrow::Cow::Borrowed(_) => content.clone(),
-                    std::borrow::Cow::Owned(s) => s,
+        if !persisted.hide_input.trim().is_empty() {
+            if let Ok(re) = Regex::new(&persisted.hide_input) {
+                viewer.filter_state.hide_regex = Some(re);
+            }
+        }
+        if !persisted.filter_input.trim().is_empty() {
+            if let Ok(expr) = parse_filter(&persisted.filter_input) {
+                viewer.filter_state.filter_expr = Some(expr);
+            }
+        }
+        if !persisted.highlight_input.trim().is_empty() {
+            if let Ok(expr) = parse_filter(&persisted.highlight_input) {
+                viewer.filter_state.highlight_expr = Some(expr);
+            }
+        }
+
+        let (tx, rx) = mpsc::channel::<SourceEvent>();
+        let source = if let Some(port) = port {
+            LogSource::Network(port)
+        } else if let Some(ref path) = file {
+            LogSource::File(path.clone())
+        } else {
+            LogSource::Stdin
+        };
+
+        if let Err(e) = start_source(source, tx) {
+            viewer.status_message = Some(format!("Failed to start: {}", e));
+        }
+
+        let rx = Arc::new(Mutex::new(Some(rx)));
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let rx_clone = rx.clone();
+                let event = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let guard = rx_clone.lock().ok()?;
+                        let rx = guard.as_ref()?;
+                        rx.recv_timeout(Duration::from_millis(50)).ok()
+                    })
+                    .await;
+
+                if let Some(event) = event {
+                    cx.update(|_, cx| {
+                        this.update(cx, |v, cx| v.handle_event(event, cx)).ok();
+                    })
+                    .ok();
                 }
             }
+        })
+        .detach();
+
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_secs(1))
+                    .await;
+                cx.update(|_, cx| {
+                    this.update(cx, |v, cx| {
+                        if v.show_time {
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .ok();
+            }
+        })
+        .detach();
+
+        viewer
+    }
+
+    fn handle_event(&mut self, event: SourceEvent, cx: &mut Context<Self>) {
+        let was_following = self.follow_tail;
+        match event {
+            SourceEvent::Line(content) => {
+                let line = LogLine {
+                    content: content.trim_end().to_string(),
+                    timestamp: chrono::Local::now(),
+                };
+                let idx = self.lines.len();
+                if self.matches_filter(&line) {
+                    self.filtered_indices.push(idx);
+                    self.update_item_sizes();
+                }
+                self.lines.push(line);
+            }
+            SourceEvent::Error(e) => {
+                self.status_message = Some(format!("Error: {}", e));
+            }
+            SourceEvent::Connected(peer) => {
+                self.status_message = Some(format!("Connected: {}", peer));
+            }
+        }
+        if was_following {
+            self.scroll_handle.scroll_to_bottom();
+        }
+        cx.notify();
+    }
+
+    fn update_item_sizes(&mut self) {
+        let sizes: Vec<Size<Pixels>> = self
+            .filtered_indices
+            .iter()
+            .map(|_| size(px(10000.), px(LINE_HEIGHT)))
+            .collect();
+        self.item_sizes = Rc::new(sizes);
+    }
+
+    fn get_display_content(&self, line: &LogLine) -> String {
+        match &self.filter_state.hide_regex {
+            Some(re) => match re.replace_all(&line.content, "") {
+                std::borrow::Cow::Borrowed(_) => line.content.clone(),
+                std::borrow::Cow::Owned(s) => s,
+            },
             None => line.content.clone(),
         }
     }
@@ -92,706 +203,445 @@ impl GuiAppState {
         }
     }
 
-    fn rebuild_filtered_indices(&mut self) {
+    fn rebuild_filtered(&mut self) {
         self.filtered_indices.clear();
         for (i, line) in self.lines.iter().enumerate() {
             if self.matches_filter(line) {
                 self.filtered_indices.push(i);
             }
         }
-        self.clamp_scroll();
-        self.version += 1;
+        self.update_item_sizes();
     }
 
     fn save_state(&self) {
-        let state = AppState {
-            hide_input: self.hide_text.clone(),
-            filter_input: self.filter_text.clone(),
-            highlight_input: self.highlight_text.clone(),
+        AppState {
+            hide_input: self.hide_input.clone(),
+            filter_input: self.filter_input.clone(),
+            highlight_input: self.highlight_input.clone(),
             wrap_lines: false,
-        };
-        state.save();
-    }
-
-    pub fn apply_hide(&mut self) {
-        if self.hide_text.trim().is_empty() {
-            self.filter_state.hide_regex = None;
-            self.hide_error = None;
-        } else {
-            match Regex::new(&self.hide_text) {
-                Ok(re) => {
-                    self.filter_state.hide_regex = Some(re);
-                    self.hide_error = None;
-                }
-                Err(e) => {
-                    self.hide_error = Some(e.to_string());
-                    return;
-                }
-            }
         }
-        self.rebuild_filtered_indices();
-        self.save_state();
+        .save();
     }
 
-    pub fn apply_filter(&mut self) {
-        if self.filter_text.trim().is_empty() {
-            self.filter_state.filter_expr = None;
-            self.filter_error = None;
-        } else {
-            match parse_filter(&self.filter_text) {
-                Ok(expr) => {
-                    self.filter_state.filter_expr = Some(expr);
-                    self.filter_error = None;
-                }
-                Err(e) => {
-                    self.filter_error = Some(e.to_string());
-                    return;
-                }
-            }
+    fn scroll_up(&mut self, _: &ScrollUp, _: &mut Window, cx: &mut Context<Self>) {
+        let current = self.scroll_handle.offset();
+        self.scroll_handle
+            .set_offset(gpui::point(current.x, current.y - px(LINE_HEIGHT)));
+        self.follow_tail = false;
+        cx.notify();
+    }
+
+    fn scroll_down(&mut self, _: &ScrollDown, _: &mut Window, cx: &mut Context<Self>) {
+        let current = self.scroll_handle.offset();
+        self.scroll_handle
+            .set_offset(gpui::point(current.x, current.y + px(LINE_HEIGHT)));
+        self.follow_tail = false;
+        cx.notify();
+    }
+
+    fn scroll_page_up(&mut self, _: &ScrollPageUp, _: &mut Window, cx: &mut Context<Self>) {
+        let current = self.scroll_handle.offset();
+        self.scroll_handle
+            .set_offset(gpui::point(current.x, current.y - px(LINE_HEIGHT * 20.0)));
+        self.follow_tail = false;
+        cx.notify();
+    }
+
+    fn scroll_page_down(&mut self, _: &ScrollPageDown, _: &mut Window, cx: &mut Context<Self>) {
+        let current = self.scroll_handle.offset();
+        self.scroll_handle
+            .set_offset(gpui::point(current.x, current.y + px(LINE_HEIGHT * 20.0)));
+        self.follow_tail = false;
+        cx.notify();
+    }
+
+    fn scroll_to_top(&mut self, _: &ScrollToTop, _: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        self.follow_tail = false;
+        cx.notify();
+    }
+
+    fn scroll_to_bottom_action(
+        &mut self,
+        _: &ScrollToBottom,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.scroll_handle.scroll_to_bottom();
+        self.follow_tail = true;
+        cx.notify();
+    }
+
+    fn toggle_follow(&mut self, _: &ToggleFollow, _: &mut Window, cx: &mut Context<Self>) {
+        self.follow_tail = !self.follow_tail;
+        if self.follow_tail {
+            self.scroll_handle.scroll_to_bottom();
         }
-        self.rebuild_filtered_indices();
-        self.save_state();
+        cx.notify();
     }
 
-    pub fn apply_highlight(&mut self) {
-        if self.highlight_text.trim().is_empty() {
-            self.filter_state.highlight_expr = None;
-        } else {
-            if let Ok(expr) = parse_filter(&self.highlight_text) {
-                self.filter_state.highlight_expr = Some(expr);
-            }
-        }
-        self.version += 1;
-        self.save_state();
+    fn toggle_time(&mut self, _: &ToggleTime, _: &mut Window, cx: &mut Context<Self>) {
+        self.show_time = !self.show_time;
+        cx.notify();
     }
 
-    pub fn add_line(&mut self, content: String) {
-        let line = LogLine {
-            content: content
-                .trim_end_matches('\n')
-                .trim_end_matches('\r')
-                .to_string(),
-            timestamp: chrono::Local::now(),
-        };
-        let idx = self.lines.len();
-        let matches = self.matches_filter(&line);
-        self.lines.push(line);
-        if matches {
-            self.filtered_indices.push(idx);
-        }
-    }
-
-    pub fn clear(&mut self) {
+    fn clear_logs(&mut self, _: &ClearLogs, _: &mut Window, cx: &mut Context<Self>) {
         self.lines.clear();
         self.filtered_indices.clear();
-        self.scroll_y = 0.0;
-        self.version += 1;
-    }
-
-    pub fn total_height(&self) -> f64 {
-        self.filtered_indices.len() as f64 * LINE_HEIGHT
-    }
-
-    pub fn max_scroll(&self) -> f64 {
-        (self.total_height() - self.container_height).max(0.0)
-    }
-
-    pub fn clamp_scroll(&mut self) {
-        let max = self.max_scroll();
-        self.scroll_y = self.scroll_y.clamp(0.0, max);
-    }
-
-    pub fn scroll_to_bottom(&mut self) {
-        self.scroll_y = self.max_scroll();
-    }
-
-    pub fn is_at_bottom(&self) -> bool {
-        self.scroll_y >= self.max_scroll() - 1.0
+        self.update_item_sizes();
+        cx.notify();
     }
 }
 
-#[derive(Props, Clone, PartialEq)]
-pub struct GuiAppProps {
-    pub file: Option<PathBuf>,
-    pub port: Option<u16>,
+impl Focusable for LogViewer {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
 }
 
-fn highlight_content(content: &str, highlight_expr: &Option<FilterExpr>) -> Vec<(String, bool)> {
-    let Some(expr) = highlight_expr else {
-        return vec![(content.to_string(), false)];
+fn render_highlighted_line(content: &str, highlight_expr: &Option<crate::filter::FilterExpr>) -> impl IntoElement {
+    let highlight_expr = match highlight_expr {
+        Some(expr) => expr,
+        None => return div().child(content.to_string()),
     };
 
-    let matches = expr.find_all_matches(content);
+    let matches = highlight_expr.find_all_matches(content);
     if matches.is_empty() {
-        return vec![(content.to_string(), false)];
+        return div().child(content.to_string());
     }
 
-    let mut result = Vec::new();
+    let mut children: Vec<gpui::AnyElement> = Vec::new();
     let mut last_end = 0;
 
     for (start, end) in matches {
         if start > last_end {
-            result.push((content[last_end..start].to_string(), false));
+            children.push(
+                div()
+                    .child(content[last_end..start].to_string())
+                    .into_any_element(),
+            );
         }
-        if end > start {
-            result.push((content[start..end].to_string(), true));
-        }
+        children.push(
+            div()
+                .bg(rgba(0xffcc0066))
+                .child(content[start..end].to_string())
+                .into_any_element(),
+        );
         last_end = end;
     }
 
     if last_end < content.len() {
-        result.push((content[last_end..].to_string(), false));
+        children.push(
+            div()
+                .child(content[last_end..].to_string())
+                .into_any_element(),
+        );
     }
 
-    result
+    div().flex().children(children)
 }
 
-#[component]
-pub fn GuiApp(props: GuiAppProps) -> Element {
-    let mut app_state = use_signal(|| GuiAppState::new());
-    let mut source_rx: Signal<Option<Receiver<SourceEvent>>> = use_signal(|| None);
+impl Render for LogViewer {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let total = self.lines.len();
+        let filtered = self.filtered_indices.len();
+        let follow = self.follow_tail;
+        let show_time = self.show_time;
 
-    use_effect({
-        let file = props.file.clone();
-        let port = props.port;
-        move || {
-            let (sync_tx, sync_rx) = mpsc::channel::<SourceEvent>();
-            let (async_tx, async_rx) = async_channel::unbounded::<SourceEvent>();
-
-            std::thread::spawn(move || {
-                while let Ok(event) = sync_rx.recv() {
-                    if async_tx.send_blocking(event).is_err() {
-                        break;
-                    }
-                }
-            });
-
-            let source = if let Some(port) = port {
-                LogSource::Network(port)
-            } else if let Some(ref path) = file {
-                LogSource::File(path.clone())
-            } else {
-                LogSource::Stdin
-            };
-
-            if let Err(e) = start_source(source, sync_tx) {
-                app_state.write().status_message = Some(format!("Failed to start source: {}", e));
-            } else {
-                source_rx.set(Some(async_rx));
-            }
-        }
-    });
-
-    use_future(move || async move {
-        let rx = loop {
-            let maybe_rx = source_rx.read().clone();
-            if let Some(rx) = maybe_rx {
-                break rx;
-            }
-            async_std::task::sleep(Duration::from_millis(10)).await;
+        let time_bg = if show_time {
+            rgb(0x007acc)
+        } else {
+            rgb(0x3c3c3c)
+        };
+        let follow_bg = if follow {
+            rgb(0x007acc)
+        } else {
+            rgb(0x3c3c3c)
         };
 
-        let mut pending_lines: Vec<String> = Vec::new();
-        let mut last_data_time: Option<Instant> = None;
-        let mut current_threshold_ms: f64 = BASE_RENDER_THRESHOLD_MS;
+        let hide_display: SharedString = if self.hide_input.is_empty() {
+            "...".into()
+        } else {
+            self.hide_input.clone().into()
+        };
+        let filter_display: SharedString = if self.filter_input.is_empty() {
+            "...".into()
+        } else {
+            self.filter_input.clone().into()
+        };
+        let highlight_display: SharedString = if self.highlight_input.is_empty() {
+            "...".into()
+        } else {
+            self.highlight_input.clone().into()
+        };
 
-        loop {
-            if let Some(last_time) = last_data_time {
-                let threshold = Duration::from_micros((current_threshold_ms * 1000.0) as u64);
-                let wait_duration = threshold.saturating_sub(last_time.elapsed());
-
-                match async_std::future::timeout(wait_duration, rx.recv()).await {
-                    Ok(Ok(event)) => {
-                        match event {
-                            SourceEvent::Line(content) => {
-                                pending_lines.push(content);
-                                current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
-                                    .max(MIN_RENDER_THRESHOLD_MS);
-                            }
-                            SourceEvent::Error(e) => {
-                                app_state.write().status_message = Some(format!("Error: {}", e));
-                            }
-                            SourceEvent::Connected(peer) => {
-                                app_state.write().status_message =
-                                    Some(format!("Connected: {}", peer));
-                            }
-                        }
-                    }
-                    Ok(Err(_)) => break,
-                    Err(_) => {
-                        let lines_to_add: Vec<String> = pending_lines.drain(..).collect();
-                        let mut state = app_state.write();
-                        let was_at_bottom = state.follow_tail;
-                        for line in lines_to_add {
-                            state.add_line(line);
-                        }
-                        if was_at_bottom {
-                            state.scroll_to_bottom();
-                        }
-                        state.version += 1;
-                        drop(state);
-
-                        last_data_time = None;
-                        current_threshold_ms = BASE_RENDER_THRESHOLD_MS;
-                    }
-                }
-            } else {
-                match rx.recv().await {
-                    Ok(event) => {
-                        match event {
-                            SourceEvent::Line(content) => {
-                                pending_lines.push(content);
-                                last_data_time = Some(Instant::now());
-                                current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
-                                    .max(MIN_RENDER_THRESHOLD_MS);
-                            }
-                            SourceEvent::Error(e) => {
-                                app_state.write().status_message = Some(format!("Error: {}", e));
-                            }
-                            SourceEvent::Connected(peer) => {
-                                app_state.write().status_message =
-                                    Some(format!("Connected: {}", peer));
-                            }
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-    });
-
-    use_future(move || async move {
-        loop {
-            async_std::task::sleep(Duration::from_secs(1)).await;
-            if app_state.read().show_time {
-                app_state.write().version += 1;
-            }
-        }
-    });
-
-    let state = app_state.read();
-    let total_lines = state.lines.len();
-    let filtered_count = state.filtered_indices.len();
-    let scroll_y = state.scroll_y;
-    let container_height = state.container_height;
-    let follow_tail = state.follow_tail;
-    let show_time = state.show_time;
-    let hide_text = state.hide_text.clone();
-    let filter_text = state.filter_text.clone();
-    let highlight_text = state.highlight_text.clone();
-    let hide_error = state.hide_error.clone();
-    let filter_error = state.filter_error.clone();
-    let status_message = state.status_message.clone();
-    let highlight_expr = state.filter_state.highlight_expr.clone();
-    let total_height = state.total_height();
-    let max_scroll = state.max_scroll();
-    let version = state.version;
-    drop(state);
-
-    let start_idx = (scroll_y / LINE_HEIGHT).floor() as usize;
-    let visible_count = (container_height / LINE_HEIGHT).ceil() as usize + 2;
-    let end_idx = (start_idx + visible_count).min(filtered_count);
-    let top_offset = scroll_y % LINE_HEIGHT;
-
-    let visible_lines: Vec<(usize, usize, LogLine, String)> = {
-        let state = app_state.read();
-        (start_idx..end_idx)
-            .enumerate()
-            .filter_map(|(view_idx, filter_idx)| {
-                state
-                    .filtered_indices
-                    .get(filter_idx)
-                    .and_then(|&line_idx| {
-                        state.lines.get(line_idx).map(|line| {
-                            let content = state.get_display_content(line);
-                            (view_idx, line_idx, line.clone(), content)
-                        })
-                    })
-            })
-            .collect()
-    };
-
-    let scroll_thumb_height = if total_height > 0.0 {
-        (container_height / total_height * container_height)
-            .max(30.0)
-            .min(container_height)
-    } else {
-        container_height
-    };
-    let scroll_thumb_top = if max_scroll > 0.0 {
-        scroll_y / max_scroll * (container_height - scroll_thumb_height)
-    } else {
-        0.0
-    };
-
-    rsx! {
-        style { {CSS} }
-        div { class: "app",
-            div { class: "toolbar",
-                div { class: "filter-group",
-                    label { "Hide:" }
-                    input {
-                        r#type: "text",
-                        class: if hide_error.is_some() { "error" } else { "" },
-                        placeholder: "regex to hide...",
-                        value: "{hide_text}",
-                        oninput: move |e| app_state.write().hide_text = e.value(),
-                        onkeydown: move |e| {
-                            if e.key() == Key::Enter {
-                                app_state.write().apply_hide();
-                            }
-                        },
-                    }
-                }
-                div { class: "filter-group",
-                    label { "Filter:" }
-                    input {
-                        r#type: "text",
-                        class: if filter_error.is_some() { "error" } else { "" },
-                        placeholder: "filter expression...",
-                        value: "{filter_text}",
-                        oninput: move |e| app_state.write().filter_text = e.value(),
-                        onkeydown: move |e| {
-                            if e.key() == Key::Enter {
-                                app_state.write().apply_filter();
-                            }
-                        },
-                    }
-                }
-                div { class: "filter-group",
-                    label { "Highlight:" }
-                    input {
-                        r#type: "text",
-                        placeholder: "highlight expression...",
-                        value: "{highlight_text}",
-                        oninput: move |e| app_state.write().highlight_text = e.value(),
-                        onkeydown: move |e| {
-                            if e.key() == Key::Enter {
-                                app_state.write().apply_highlight();
-                            }
-                        },
-                    }
-                }
-                div { class: "toolbar-actions",
-                    button {
-                        class: if show_time { "active" } else { "" },
-                        onclick: move |_| {
-                            let mut s = app_state.write();
-                            s.show_time = !s.show_time;
-                            s.version += 1;
-                        },
-                        "Time"
-                    }
-                    button {
-                        class: if follow_tail { "active" } else { "" },
-                        onclick: move |_| {
-                            let mut s = app_state.write();
-                            s.follow_tail = !s.follow_tail;
-                            if s.follow_tail {
-                                s.scroll_to_bottom();
-                            }
-                            s.version += 1;
-                        },
-                        "Follow"
-                    }
-                    button {
-                        onclick: move |_| {
-                            app_state.write().clear();
-                        },
-                        "Clear"
-                    }
-                }
-            }
-
-            div { class: "log-wrapper",
-                div {
-                    class: "log-container",
-                    tabindex: "0",
-                    onmounted: move |e| async move {
-                        if let Ok(rect) = e.get_client_rect().await {
-                            let mut s = app_state.write();
-                            s.container_height = rect.size.height;
-                            s.clamp_scroll();
-                        }
-                    },
-                    onwheel: move |e| {
-                        e.prevent_default();
-                        let wheel_delta = e.delta();
-                        let delta_y = match wheel_delta {
-                            WheelDelta::Pixels(p) => p.y,
-                            WheelDelta::Lines(l) => l.y * LINE_HEIGHT,
-                            WheelDelta::Pages(p) => p.y * container_height,
-                        };
-                        let mut s = app_state.write();
-                        s.scroll_y += delta_y;
-                        s.clamp_scroll();
-                        s.follow_tail = s.is_at_bottom();
-                        s.version += 1;
-                    },
-                    onkeydown: move |e| {
-                        let mut s = app_state.write();
-                        match e.key() {
-                            Key::ArrowUp => {
-                                s.scroll_y -= LINE_HEIGHT;
-                                s.follow_tail = false;
-                            }
-                            Key::ArrowDown => {
-                                s.scroll_y += LINE_HEIGHT;
-                                s.follow_tail = s.is_at_bottom();
-                            }
-                            Key::PageUp => {
-                                s.scroll_y -= s.container_height;
-                                s.follow_tail = false;
-                            }
-                            Key::PageDown => {
-                                s.scroll_y += s.container_height;
-                                s.follow_tail = s.is_at_bottom();
-                            }
-                            Key::Home => {
-                                s.scroll_y = 0.0;
-                                s.follow_tail = false;
-                            }
-                            Key::End => {
-                                s.scroll_to_bottom();
-                                s.follow_tail = true;
-                            }
-                            _ => return,
-                        }
-                        s.clamp_scroll();
-                        s.version += 1;
-                    },
-                    div {
-                        class: "log-list",
-                        key: "{version}",
-                        style: "transform: translateY(-{top_offset}px);",
-                        for (_view_idx, line_idx, line, content) in visible_lines {
-                            div {
-                                class: "log-line",
-                                key: "{line_idx}",
-                                if show_time {
-                                    span { class: "timestamp", "{format_relative_time(line.timestamp)}" }
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x1e1e1e))
+            .text_color(rgb(0xd4d4d4))
+            .text_size(px(13.))
+            .key_context("LogViewer")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::scroll_up))
+            .on_action(cx.listener(Self::scroll_down))
+            .on_action(cx.listener(Self::scroll_page_up))
+            .on_action(cx.listener(Self::scroll_page_down))
+            .on_action(cx.listener(Self::scroll_to_top))
+            .on_action(cx.listener(Self::scroll_to_bottom_action))
+            .on_action(cx.listener(Self::toggle_follow))
+            .on_action(cx.listener(Self::toggle_time))
+            .on_action(cx.listener(Self::clear_logs))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_4()
+                    .p_2()
+                    .bg(rgb(0x252526))
+                    .border_b_1()
+                    .border_color(rgb(0x3c3c3c))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0x858585))
+                                    .child("Hide"),
+                            )
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .px_2()
+                                    .py_1()
+                                    .bg(rgb(0x3c3c3c))
+                                    .border_1()
+                                    .border_color(rgb(0x4c4c4c))
+                                    .rounded(px(3.))
+                                    .text_size(px(12.))
+                                    .child(hide_display),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0x858585))
+                                    .child("Filter"),
+                            )
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .px_2()
+                                    .py_1()
+                                    .bg(rgb(0x3c3c3c))
+                                    .border_1()
+                                    .border_color(rgb(0x4c4c4c))
+                                    .rounded(px(3.))
+                                    .text_size(px(12.))
+                                    .child(filter_display),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0x858585))
+                                    .child("Highlight"),
+                            )
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .px_2()
+                                    .py_1()
+                                    .bg(rgb(0x3c3c3c))
+                                    .border_1()
+                                    .border_color(rgb(0x4c4c4c))
+                                    .rounded(px(3.))
+                                    .text_size(px(12.))
+                                    .child(highlight_display),
+                            ),
+                    )
+                    .child(div().flex_grow())
+                    .child(
+                        div()
+                            .id("time-btn")
+                            .px_2()
+                            .py_1()
+                            .bg(time_bg)
+                            .rounded(px(3.))
+                            .text_size(px(12.))
+                            .cursor_pointer()
+                            .child("Time")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_time = !this.show_time;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("follow-btn")
+                            .px_2()
+                            .py_1()
+                            .bg(follow_bg)
+                            .rounded(px(3.))
+                            .text_size(px(12.))
+                            .cursor_pointer()
+                            .child("Follow")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.follow_tail = !this.follow_tail;
+                                if this.follow_tail {
+                                    this.scroll_handle.scroll_to_bottom();
                                 }
-                                span { class: "line-num", "{line_idx + 1}" }
-                                span { class: "content",
-                                    for (text, is_highlight) in highlight_content(&content, &highlight_expr) {
-                                        if is_highlight {
-                                            mark { class: "highlight", "{text}" }
-                                        } else {
-                                            "{text}"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if total_height > container_height {
-                    div { class: "scrollbar",
-                        div {
-                            class: "scrollbar-thumb",
-                            style: "top: {scroll_thumb_top}px; height: {scroll_thumb_height}px;",
-                        }
-                    }
-                }
-            }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("clear-btn")
+                            .px_2()
+                            .py_1()
+                            .bg(rgb(0x3c3c3c))
+                            .rounded(px(3.))
+                            .text_size(px(12.))
+                            .cursor_pointer()
+                            .child("Clear")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.lines.clear();
+                                this.filtered_indices.clear();
+                                this.update_item_sizes();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                v_virtual_list(
+                    cx.entity().clone(),
+                    "log-list",
+                    self.item_sizes.clone(),
+                    {
+                        let highlight_expr = self.filter_state.highlight_expr.clone();
+                        move |view, visible_range, _, _cx| {
+                            visible_range
+                                .filter_map(|ix| {
+                                    let line_idx = *view.filtered_indices.get(ix)?;
+                                    let line = view.lines.get(line_idx)?;
+                                    let content = view.get_display_content(line);
 
-            div { class: "statusbar",
-                span { class: "status-info",
-                    "{filtered_count} / {total_lines} lines"
-                    if follow_tail { " • Following" }
-                }
-                if let Some(msg) = status_message {
-                    span { class: "status-msg", "{msg}" }
-                }
-            }
-        }
+                                    let time_str = if view.show_time {
+                                        format!("{:>6} ", format_relative_time(line.timestamp))
+                                    } else {
+                                        String::new()
+                                    };
+                                    let line_num = format!("{:>5} ", line_idx + 1);
+
+                                    Some(
+                                        div()
+                                            .flex()
+                                            .h(px(LINE_HEIGHT))
+                                            .text_size(px(12.))
+                                            .font_family("monospace")
+                                            .hover(|s| s.bg(rgb(0x2a2d2e)))
+                                            .when(!time_str.is_empty(), |el| {
+                                                el.child(
+                                                    div()
+                                                        .text_color(rgb(0x6a9955))
+                                                        .child(time_str),
+                                                )
+                                            })
+                                            .child(
+                                                div().text_color(rgb(0x858585)).child(line_num),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_grow()
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .child(render_highlighted_line(
+                                                        &content,
+                                                        &highlight_expr,
+                                                    )),
+                                            ),
+                                    )
+                                })
+                                .collect()
+                        }
+                    },
+                )
+                .track_scroll(&self.scroll_handle)
+                .flex_1()
+                .p_2(),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .bg(rgb(0x007acc))
+                    .text_color(rgb(0xffffff))
+                    .text_size(px(12.))
+                    .child(format!(
+                        "{} / {} lines{}",
+                        filtered,
+                        total,
+                        if follow { " • Following" } else { "" }
+                    ))
+                    .when_some(self.status_message.clone(), |el, msg| el.child(msg)),
+            )
     }
 }
 
-const CSS: &str = r#"
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+pub fn run_gui(file: Option<PathBuf>, port: Option<u16>) {
+    Application::new().run(move |cx: &mut App| {
+        cx.bind_keys([
+            KeyBinding::new("up", ScrollUp, Some("LogViewer")),
+            KeyBinding::new("down", ScrollDown, Some("LogViewer")),
+            KeyBinding::new("pageup", ScrollPageUp, Some("LogViewer")),
+            KeyBinding::new("pagedown", ScrollPageDown, Some("LogViewer")),
+            KeyBinding::new("cmd-up", ScrollToTop, Some("LogViewer")),
+            KeyBinding::new("cmd-down", ScrollToBottom, Some("LogViewer")),
+            KeyBinding::new("cmd-f", ToggleFollow, Some("LogViewer")),
+            KeyBinding::new("cmd-t", ToggleTime, Some("LogViewer")),
+            KeyBinding::new("cmd-k", ClearLogs, Some("LogViewer")),
+            KeyBinding::new("cmd-q", Quit, None),
+        ]);
 
-.app {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    background: light-dark(#ffffff, #1e1e1e);
-    color: light-dark(#1e1e1e, #d4d4d4);
-    font-family: system-ui, -apple-system, sans-serif;
-    font-size: 13px;
-    color-scheme: light dark;
-}
+        cx.on_action(|_: &Quit, cx| cx.quit());
 
-.toolbar {
-    display: flex;
-    gap: 16px;
-    padding: 8px 12px;
-    background: light-dark(#f3f3f3, #252526);
-    border-bottom: 1px solid light-dark(#d4d4d4, #3c3c3c);
-    flex-wrap: wrap;
-    align-items: center;
-}
+        let bounds =
+            gpui::bounds(gpui::point(px(0.0), px(0.0)), gpui::size(px(1000.), px(700.)));
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Log Viewer".into()),
+                        ..Default::default()
+                    }),
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |window, cx| cx.new(|cx| LogViewer::new(file, port, window, cx)),
+            )
+            .unwrap();
 
-.filter-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+        window
+            .update(cx, |view, window, cx| {
+                window.focus(&view.focus_handle(cx));
+                cx.activate(true);
+            })
+            .unwrap();
+    });
 }
-
-.filter-group label {
-    color: light-dark(#616161, #858585);
-    font-size: 12px;
-    min-width: 55px;
-}
-
-.filter-group input {
-    background: light-dark(#ffffff, #3c3c3c);
-    border: 1px solid light-dark(#c4c4c4, #4c4c4c);
-    border-radius: 3px;
-    color: light-dark(#1e1e1e, #d4d4d4);
-    padding: 4px 8px;
-    font-size: 12px;
-    width: 180px;
-}
-
-.filter-group input:focus {
-    outline: none;
-    border-color: #007acc;
-}
-
-.filter-group input.error {
-    border-color: #f44747;
-}
-
-.toolbar-actions {
-    display: flex;
-    gap: 6px;
-    margin-left: auto;
-}
-
-.toolbar-actions button {
-    background: light-dark(#e0e0e0, #3c3c3c);
-    border: 1px solid light-dark(#c4c4c4, #4c4c4c);
-    border-radius: 3px;
-    color: light-dark(#1e1e1e, #d4d4d4);
-    padding: 4px 10px;
-    font-size: 12px;
-    cursor: pointer;
-}
-
-.toolbar-actions button:hover {
-    background: light-dark(#d0d0d0, #4c4c4c);
-}
-
-.toolbar-actions button.active {
-    background: #007acc;
-    border-color: #007acc;
-    color: #ffffff;
-}
-
-.log-wrapper {
-    flex: 1;
-    display: flex;
-    overflow: hidden;
-    position: relative;
-}
-
-.log-container {
-    flex: 1;
-    overflow: hidden;
-    background: light-dark(#ffffff, #1e1e1e);
-    outline: none;
-    position: relative;
-}
-
-.log-container:focus {
-    outline: none;
-}
-
-.log-list {
-    position: relative;
-    will-change: transform;
-}
-
-.log-line {
-    display: flex;
-    padding: 1px 12px;
-    font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
-    font-size: 12px;
-    height: 20px;
-    line-height: 18px;
-    white-space: nowrap;
-}
-
-.log-line:hover {
-    background: light-dark(#f0f0f0, #2a2d2e);
-}
-
-.timestamp {
-    color: light-dark(#098658, #6a9955);
-    margin-right: 12px;
-    flex-shrink: 0;
-}
-
-.line-num {
-    color: light-dark(#858585, #858585);
-    margin-right: 12px;
-    min-width: 50px;
-    text-align: right;
-    flex-shrink: 0;
-}
-
-.content {
-    color: light-dark(#1e1e1e, #d4d4d4);
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.highlight {
-    background: light-dark(#ffff00, #ffcc00);
-    color: light-dark(#000000, #000000);
-    padding: 0 2px;
-    border-radius: 2px;
-}
-
-.scrollbar {
-    width: 14px;
-    background: light-dark(#f0f0f0, #1e1e1e);
-    border-left: 1px solid light-dark(#d4d4d4, #3c3c3c);
-    position: relative;
-}
-
-.scrollbar-thumb {
-    position: absolute;
-    width: 10px;
-    left: 2px;
-    background: light-dark(#c4c4c4, #5a5a5a);
-    border-radius: 5px;
-    min-height: 30px;
-}
-
-.scrollbar-thumb:hover {
-    background: light-dark(#a0a0a0, #787878);
-}
-
-.statusbar {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 12px;
-    background: #007acc;
-    color: #fff;
-    font-size: 12px;
-}
-
-.status-info {
-    opacity: 0.9;
-}
-
-.status-msg {
-    opacity: 0.8;
-}
-"#;

@@ -5,7 +5,6 @@ use crate::highlight::{apply_highlights, highlight_line};
 use crate::source::SourceEvent;
 use crate::state::AppState;
 use crossterm::event::KeyCode;
-use dioxus::logger::tracing;
 use fancy_regex::Regex;
 use std::sync::mpsc::Receiver;
 
