@@ -58,6 +58,7 @@ impl App {
                 SourceEvent::Connected(_peer) => {
                     self.listen_state.has_connection = true;
                 }
+                SourceEvent::Disconnected(_peer) => {}
             }
         }
     }

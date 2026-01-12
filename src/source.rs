@@ -18,6 +18,7 @@ pub enum SourceEvent {
     Line(String),
     Error(String),
     Connected(String),
+    Disconnected(String),
 }
 
 pub fn start_source(source: LogSource, tx: Sender<SourceEvent>) -> Result<()> {
@@ -150,4 +151,5 @@ fn handle_client(stream: TcpStream, tx: Sender<SourceEvent>) {
         }
     }
     let _ = tx.send(SourceEvent::Line(format!("[disconnected: {}]", peer)));
+    let _ = tx.send(SourceEvent::Disconnected(peer));
 }

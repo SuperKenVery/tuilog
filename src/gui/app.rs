@@ -104,6 +104,7 @@ pub struct GuiAppState {
     pub hide_error: Option<String>,
     pub filter_error: Option<String>,
     pub status_message: Option<String>,
+    pub is_connected: bool,
     pub scroll_y: f64,
     pub scroll_x: f64,
     pub container_height: f64,
@@ -130,6 +131,7 @@ impl GuiAppState {
             hide_error: None,
             filter_error: None,
             status_message: None,
+            is_connected: false,
             scroll_y: 0.0,
             scroll_x: 0.0,
             container_height: 600.0,
@@ -378,7 +380,7 @@ impl GuiAppState {
     fn estimate_line_width(&self, line: &LogLine) -> f64 {
         let content = self.get_display_content(line).unwrap_or_else(|_| line.content.clone());
         let char_width = 7.2;
-        let timestamp_width = if self.show_time { 80.0 } else { 0.0 };
+        let timestamp_width = if self.show_time { 62.0 } else { 0.0 };
         let line_num_width = 62.0;
         let padding = 24.0;
         timestamp_width + line_num_width + (content.len() as f64 * char_width) + padding
@@ -642,8 +644,14 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                             }
                             SourceEvent::Connected(peer) => {
                                 listen_state.write().has_connection = true;
-                                app_state.write().status_message =
-                                    Some(format!("Connected: {}", peer));
+                                let mut state = app_state.write();
+                                state.is_connected = true;
+                                state.status_message = Some(format!("Connected: {}", peer));
+                            }
+                            SourceEvent::Disconnected(peer) => {
+                                let mut state = app_state.write();
+                                state.is_connected = false;
+                                state.status_message = Some(format!("Disconnected: {}", peer));
                             }
                         }
                     }
@@ -681,8 +689,14 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                             }
                             SourceEvent::Connected(peer) => {
                                 listen_state.write().has_connection = true;
-                                app_state.write().status_message =
-                                    Some(format!("Connected: {}", peer));
+                                let mut state = app_state.write();
+                                state.is_connected = true;
+                                state.status_message = Some(format!("Connected: {}", peer));
+                            }
+                            SourceEvent::Disconnected(peer) => {
+                                let mut state = app_state.write();
+                                state.is_connected = false;
+                                state.status_message = Some(format!("Disconnected: {}", peer));
                             }
                         }
                     }
@@ -730,6 +744,7 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
     let hide_error = state.hide_error.clone();
     let filter_error = state.filter_error.clone();
     let status_message = state.status_message.clone();
+    let is_connected = state.is_connected;
     let highlight_expr = state.filter_state.highlight_expr.clone();
     let max_scroll = state.max_scroll();
     let total_height = state.total_height();
@@ -992,12 +1007,13 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                 }
             }
 
-            div { class: "statusbar",
+            div {
+                class: if status_message.is_some() && !is_connected { "statusbar disconnected" } else { "statusbar" },
                 span { class: "status-info",
                     "{filtered_count} / {total_lines} lines"
                     if follow_tail { " • Following" }
                 }
-                if let Some(msg) = status_message {
+                if let Some(ref msg) = status_message {
                     span { class: "status-msg", "{msg}" }
                 }
             }
@@ -1171,6 +1187,8 @@ html, body {
     color: light-dark(#098658, #6a9955);
     margin-right: 12px;
     flex-shrink: 0;
+    width: 50px;
+    text-align: right;
 }
 
 .line-num {
@@ -1298,6 +1316,10 @@ html, body {
     background: #007acc;
     color: #fff;
     font-size: 12px;
+}
+
+.statusbar.disconnected {
+    background: #c42b1c;
 }
 
 .status-info {
