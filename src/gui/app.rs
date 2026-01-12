@@ -578,6 +578,7 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
     let mut source_rx: Signal<Option<Receiver<SourceEvent>>> = use_signal(|| None);
     let mut container_element: Signal<Option<Rc<MountedData>>> = use_signal(|| None);
     let mut listen_state = use_signal(|| ListenState::new(props.port));
+    let mut pending_scroll_to_bottom = use_signal(|| false);
 
     use_effect({
         let file = props.file.clone();
@@ -656,6 +657,7 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                         }
                         if was_at_bottom {
                             state.scroll_to_bottom();
+                            pending_scroll_to_bottom.set(true);
                         }
                         state.version += 1;
                         drop(state);
@@ -696,6 +698,20 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
             if app_state.read().show_time {
                 app_state.write().version += 1;
             }
+        }
+    });
+
+    use_future(move || async move {
+        loop {
+            if *pending_scroll_to_bottom.read() {
+                pending_scroll_to_bottom.set(false);
+                if let Some(ref el) = *container_element.read() {
+                    let total = app_state.read().total_height();
+                    let coords = dioxus::html::geometry::PixelsVector2D::new(0.0, total);
+                    let _ = el.scroll(coords, ScrollBehavior::Instant).await;
+                }
+            }
+            async_std::task::sleep(Duration::from_millis(16)).await;
         }
     });
 
