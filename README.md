@@ -1,16 +1,17 @@
 # Log Viewer
 
-View and stream your logs in terminal.
+View and stream your logs in TUI or GUI.
 
 Screenshot: viewing `Cargo.lock` in this app
 ![](./readme_assets/screenshot.png)
 
 ## Features
 
-- Simple yet powerful **filter system**. Use syntax like `(kw1 && !kw2) || kw3`.
+- Simple yet powerful **filter system**. Use syntax like `(kw1 && !kw2) || kw3`, kw can be regular expressions.
 - **Hide part of any log line** with regular expression. Stop spending your attention on time stamp.
 - **Highlight** part of your logs.
-- **Network mode**. Works like nc, but with interactive filtering!
+- **Listen on port**. Works like nc, but with interactive filtering!
+- **Line start matcher**. Deal with multiline logs with ease.
 
 ## Installation
 
