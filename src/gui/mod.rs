@@ -1,4 +1,7 @@
 pub mod app;
+mod components;
+mod state;
+mod style;
 
 use anyhow::Result;
 use dioxus::prelude::*;
