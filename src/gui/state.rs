@@ -30,6 +30,7 @@ pub struct GuiAppState {
     pub version: u64,
     pub line_heights: Vec<f64>,
     pub line_offsets: Vec<f64>,
+    pub last_update_time: Option<chrono::DateTime<chrono::Local>>,
 }
 
 impl GuiAppState {
@@ -59,6 +60,7 @@ impl GuiAppState {
             version: 0,
             line_heights: Vec::new(),
             line_offsets: Vec::new(),
+            last_update_time: None,
         };
         if !s.hide_text.trim().is_empty() {
             if let Ok(re) = Regex::new(&s.hide_text) {
@@ -229,12 +231,13 @@ impl GuiAppState {
     }
 
     pub fn add_line(&mut self, content: String) {
+        let now = chrono::Local::now();
         let line = LogLine {
             content: content
                 .trim_end_matches('\n')
                 .trim_end_matches('\r')
                 .to_string(),
-            timestamp: chrono::Local::now(),
+            timestamp: now,
         };
         let idx = self.lines.len();
         let matches = self.matches_filter(&line);
@@ -243,6 +246,7 @@ impl GuiAppState {
             self.max_content_width = estimated_width;
         }
         self.lines.push(line);
+        self.last_update_time = Some(now);
         if matches {
             self.filtered_indices.push(idx);
             if self.line_offsets.is_empty() {
@@ -273,6 +277,7 @@ impl GuiAppState {
         self.scroll_x = 0.0;
         self.max_content_width = 0.0;
         self.version += 1;
+        self.last_update_time = None;
     }
 
     pub fn max_scroll(&self) -> f64 {

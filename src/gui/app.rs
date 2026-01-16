@@ -220,6 +220,7 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
     let total_height = state.total_height();
     let (start_idx, end_idx) = state.find_visible_range(scroll_y, container_height + LINE_HEIGHT * 3.0);
     let version = state.version;
+    let last_update_time = state.last_update_time;
     drop(state);
 
     let (visible_lines, runtime_hide_error): (Vec<(usize, usize, f64, LogLine, String)>, Option<String>) = {
@@ -509,6 +510,9 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                 span { class: "status-info",
                     "{filtered_count} / {total_lines} lines"
                     if follow_tail { " • Following" }
+                    if let Some(time) = last_update_time {
+                        " • Last: {format_relative_time(time)}"
+                    }
                 }
                 if let Some(ref msg) = status_message {
                     span { class: "status-msg", "{msg}" }

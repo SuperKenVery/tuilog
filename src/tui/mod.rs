@@ -263,10 +263,16 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let status = if let Some(msg) = &app.status_message {
         msg.clone()
     } else {
+        let last_update = if let Some(time) = app.log_state.last_update_time {
+            format!(" | Last: {}", format_relative_time(time))
+        } else {
+            String::new()
+        };
         format!(
-            "q:Quit d:Hide f:Filter h:Highlight s:LineStart c:Clear t:Time({}) w:Wrap({})",
+            "q:Quit d:Hide f:Filter h:Highlight s:LineStart c:Clear t:Time({}) w:Wrap({}){}",
             if app.show_time { "ON" } else { "OFF" },
-            if app.wrap_lines { "ON" } else { "OFF" }
+            if app.wrap_lines { "ON" } else { "OFF" },
+            last_update
         )
     };
 

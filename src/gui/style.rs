@@ -36,12 +36,15 @@ html, body {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex: 1;
+    min-width: 200px;
 }
 
 .filter-group label {
     color: light-dark(#616161, #858585);
     font-size: 12px;
     min-width: 55px;
+    flex-shrink: 0;
 }
 
 .filter-group input {
@@ -51,7 +54,8 @@ html, body {
     color: light-dark(#1e1e1e, #d4d4d4);
     padding: 4px 8px;
     font-size: 12px;
-    width: 180px;
+    flex: 1;
+    min-width: 150px;
 }
 
 .filter-group input:focus {

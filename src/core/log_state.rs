@@ -59,6 +59,7 @@ pub struct LogState {
     pub filtered_indices: Vec<usize>,
     pub bottom_line_idx: usize,
     pub follow_tail: bool,
+    pub last_update_time: Option<DateTime<Local>>,
 }
 
 impl Default for LogState {
@@ -68,18 +69,21 @@ impl Default for LogState {
             filtered_indices: Vec::new(),
             bottom_line_idx: 0,
             follow_tail: true,
+            last_update_time: None,
         }
     }
 }
 
 impl LogState {
     pub fn add_line(&mut self, content: String) -> usize {
+        let now = Local::now();
         let line = LogLine {
-            timestamp: Local::now(),
+            timestamp: now,
             content,
         };
         let idx = self.lines.len();
         self.lines.push(line);
+        self.last_update_time = Some(now);
         idx
     }
 
@@ -87,6 +91,7 @@ impl LogState {
         self.lines.clear();
         self.filtered_indices.clear();
         self.bottom_line_idx = 0;
+        self.last_update_time = None;
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
