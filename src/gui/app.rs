@@ -1,4 +1,4 @@
-use crate::core::{format_relative_time, ListenState, LogLine};
+use crate::core::{format_relative_time, get_time_age, ListenState, LogLine, TimeAge};
 use crate::filter::FilterExpr;
 use crate::highlight::{apply_highlights, highlight_line, HighlightStyle};
 use crate::source::{start_source, LogSource, SourceEvent};
@@ -472,7 +472,17 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                                         }
                                     },
                                     if show_time {
-                                        span { class: "timestamp", "{format_relative_time(line.timestamp)}" }
+                                        {
+                                            let time_age = get_time_age(line.timestamp);
+                                            let age_class = match time_age {
+                                                TimeAge::VeryRecent => "timestamp very-recent",
+                                                TimeAge::Recent => "timestamp recent",
+                                                TimeAge::Minutes => "timestamp minutes",
+                                                TimeAge::Hours => "timestamp hours",
+                                                TimeAge::Days => "timestamp days",
+                                            };
+                                            rsx! { span { class: "{age_class}", "{format_relative_time(line.timestamp)}" } }
+                                        }
                                     }
                                     span { class: "line-num", "{line_idx + 1}" }
                                     span { class: "content",

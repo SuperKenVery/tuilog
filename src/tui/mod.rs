@@ -149,9 +149,21 @@ fn draw_log_view(frame: &mut Frame, app: &mut App, area: Rect) {
 
         let mut prefix_spans = Vec::new();
         if app.show_time {
+            let time_age = crate::core::get_time_age(log_line.timestamp);
+            let (time_color, is_bold) = match time_age {
+                crate::core::TimeAge::VeryRecent => (Color::LightGreen, true),
+                crate::core::TimeAge::Recent => (Color::Green, false),
+                crate::core::TimeAge::Minutes => (Color::Rgb(136, 136, 136), false),
+                crate::core::TimeAge::Hours => (Color::Rgb(102, 102, 102), false),
+                crate::core::TimeAge::Days => (Color::Rgb(85, 85, 85), false),
+            };
+            let mut style = Style::default().fg(time_color);
+            if is_bold {
+                style = style.add_modifier(ratatui::style::Modifier::BOLD);
+            }
             prefix_spans.push(Span::styled(
                 format!("{:>6} ", format_relative_time(log_line.timestamp)),
-                Style::default().fg(Color::DarkGray),
+                style,
             ));
         }
         prefix_spans.push(Span::styled(

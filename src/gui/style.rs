@@ -157,11 +157,31 @@ html, body {
 }
 
 .timestamp {
-    color: light-dark(#098658, #6a9955);
     margin-right: 12px;
     flex-shrink: 0;
-    width: 50px;
+    width: 32px;
     text-align: right;
+}
+
+.timestamp.very-recent {
+    color: light-dark(#00aa00, #00ff00);
+    font-weight: bold;
+}
+
+.timestamp.recent {
+    color: light-dark(#098658, #4ec9b0);
+}
+
+.timestamp.minutes {
+    color: light-dark(#666666, #888888);
+}
+
+.timestamp.hours {
+    color: light-dark(#999999, #666666);
+}
+
+.timestamp.days {
+    color: light-dark(#aaaaaa, #555555);
 }
 
 .line-num {

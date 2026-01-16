@@ -6,6 +6,15 @@ pub struct LogLine {
     pub content: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TimeAge {
+    VeryRecent,
+    Recent,
+    Minutes,
+    Hours,
+    Days,
+}
+
 pub fn format_relative_time(timestamp: DateTime<Local>) -> String {
     let now = Local::now();
     let duration = now.signed_duration_since(timestamp);
@@ -23,6 +32,24 @@ pub fn format_relative_time(timestamp: DateTime<Local>) -> String {
         format!("-{}h", total_secs / 3600)
     } else {
         format!("-{}d", total_secs / 86400)
+    }
+}
+
+pub fn get_time_age(timestamp: DateTime<Local>) -> TimeAge {
+    let now = Local::now();
+    let duration = now.signed_duration_since(timestamp);
+    let total_secs = duration.num_seconds();
+    
+    if total_secs < 15 {
+        TimeAge::VeryRecent
+    } else if total_secs < 60 {
+        TimeAge::Recent
+    } else if total_secs < 3600 {
+        TimeAge::Minutes
+    } else if total_secs < 86400 {
+        TimeAge::Hours
+    } else {
+        TimeAge::Days
     }
 }
 

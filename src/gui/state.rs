@@ -257,7 +257,7 @@ impl GuiAppState {
     fn estimate_line_width(&self, line: &LogLine) -> f64 {
         let content = self.get_display_content(line).unwrap_or_else(|_| line.content.clone());
         let char_width = 7.2;
-        let timestamp_width = if self.show_time { 62.0 } else { 0.0 };
+        let timestamp_width = if self.show_time { 32.0 } else { 0.0 };
         let line_num_width = 62.0;
         let padding = 24.0;
         timestamp_width + line_num_width + (content.len() as f64 * char_width) + padding
