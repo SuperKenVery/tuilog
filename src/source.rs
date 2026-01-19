@@ -18,6 +18,7 @@ pub enum LogSource {
 
 pub enum SourceEvent {
     Line(String),
+    SystemLine(String),
     Error(String),
     Connected(String),
     Disconnected(String),
@@ -191,8 +192,22 @@ fn handle_client(stream: TcpStream, tx: Sender<SourceEvent>, line_start_regex: O
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
+    
+    if let Err(e) = stream.set_nodelay(true) {
+        let _ = tx.send(SourceEvent::Error(format!("Failed to set TCP_NODELAY: {}", e)));
+    }
+    
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(10))
+        .with_interval(Duration::from_secs(5));
+    
+    let socket_ref = socket2::SockRef::from(&stream);
+    if let Err(e) = socket_ref.set_tcp_keepalive(&keepalive) {
+        let _ = tx.send(SourceEvent::Error(format!("Failed to set TCP keepalive: {}", e)));
+    }
+    
     let _ = tx.send(SourceEvent::Connected(peer.clone()));
-    let _ = tx.send(SourceEvent::Line(format!("[connected: {}]", peer)));
+    let _ = tx.send(SourceEvent::SystemLine(format!("[connected: {}]", peer)));
 
     let reader = BufReader::new(&stream);
     let mut aggregator = MultilineAggregator::new(line_start_regex);
@@ -210,6 +225,6 @@ fn handle_client(stream: TcpStream, tx: Sender<SourceEvent>, line_start_regex: O
         }
     }
     aggregator.flush(&tx);
-    let _ = tx.send(SourceEvent::Line(format!("[disconnected: {}]", peer)));
+    let _ = tx.send(SourceEvent::SystemLine(format!("[disconnected: {}]", peer)));
     let _ = tx.send(SourceEvent::Disconnected(peer));
 }

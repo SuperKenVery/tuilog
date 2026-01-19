@@ -51,6 +51,12 @@ impl App {
                         self.log_state.filtered_indices.push(idx);
                     }
                 }
+                SourceEvent::SystemLine(content) => {
+                    let idx = self.log_state.add_line_with_update(content, false);
+                    if self.matches_filter(idx) {
+                        self.log_state.filtered_indices.push(idx);
+                    }
+                }
                 SourceEvent::Error(e) => {
                     self.status_message = Some(format!("Source error: {}", e));
                 }

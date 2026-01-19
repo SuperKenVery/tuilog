@@ -1,4 +1,6 @@
 use crate::core::{ListenDisplayMode, ListenState};
+use crate::filter::FilterExpr;
+use super::state::highlight_content;
 use dioxus::prelude::*;
 
 fn format_addr_display(ip: &std::net::IpAddr, port: u16, is_v6: bool, mode: ListenDisplayMode) -> String {
@@ -15,6 +17,38 @@ fn format_addr_display(ip: &std::net::IpAddr, port: u16, is_v6: bool, mode: List
                 format!("nc -6 {} {}", ip, port)
             } else {
                 format!("nc {} {}", ip, port)
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone)]
+pub struct LogLineContentProps {
+    pub content: String,
+    pub highlight_text: String,
+    pub highlight_expr: Option<FilterExpr>,
+}
+
+impl PartialEq for LogLineContentProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content && self.highlight_text == other.highlight_text
+    }
+}
+
+#[component]
+pub fn LogLineContent(props: LogLineContentProps) -> Element {
+    let parts = highlight_content(&props.content, &props.highlight_expr);
+    rsx! {
+        span { class: "content",
+            for (text, style) in parts {
+                {
+                    let class = style.css_class();
+                    if class.is_empty() {
+                        rsx! { "{text}" }
+                    } else {
+                        rsx! { span { class: "{class}", "{text}" } }
+                    }
+                }
             }
         }
     }

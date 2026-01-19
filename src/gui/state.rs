@@ -1,9 +1,15 @@
 use crate::core::{FilterState, LogLine};
-use crate::filter::parse_filter;
+use crate::filter::{parse_filter, FilterExpr};
+use crate::highlight::{apply_highlights, highlight_line, HighlightStyle};
 use crate::state::AppState;
 use fancy_regex::Regex;
 
 const LINE_HEIGHT: f64 = 20.0;
+
+pub fn highlight_content(content: &str, highlight_expr: &Option<FilterExpr>) -> Vec<(String, HighlightStyle)> {
+    let spans = highlight_line(content, highlight_expr.as_ref(), true, true);
+    apply_highlights(content, &spans)
+}
 
 #[derive(Clone)]
 pub struct GuiAppState {
@@ -231,6 +237,10 @@ impl GuiAppState {
     }
 
     pub fn add_line(&mut self, content: String) {
+        self.add_line_with_update(content, true);
+    }
+
+    pub fn add_line_with_update(&mut self, content: String, update_time: bool) {
         let now = chrono::Local::now();
         let line = LogLine {
             content: content
@@ -246,7 +256,9 @@ impl GuiAppState {
             self.max_content_width = estimated_width;
         }
         self.lines.push(line);
-        self.last_update_time = Some(now);
+        if update_time {
+            self.last_update_time = Some(now);
+        }
         if matches {
             self.filtered_indices.push(idx);
             if self.line_offsets.is_empty() {

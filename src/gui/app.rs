@@ -1,6 +1,4 @@
 use crate::core::{format_relative_time, get_time_age, ListenState, LogLine, TimeAge};
-use crate::filter::FilterExpr;
-use crate::highlight::{apply_highlights, highlight_line, HighlightStyle};
 use crate::source::{start_source, LogSource, SourceEvent};
 use crate::state::AppState;
 use async_channel::Receiver;
@@ -13,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use super::components::ListenPopup;
+use super::components::{ListenPopup, LogLineContent};
 use super::state::GuiAppState;
 use super::style::CSS;
 
@@ -26,11 +24,6 @@ const THRESHOLD_DECAY_FACTOR: f64 = 0.7;
 pub struct GuiAppProps {
     pub file: Option<PathBuf>,
     pub port: Option<u16>,
-}
-
-fn highlight_content(content: &str, highlight_expr: &Option<FilterExpr>) -> Vec<(String, HighlightStyle)> {
-    let spans = highlight_line(content, highlight_expr.as_ref(), true, true);
-    apply_highlights(content, &spans)
 }
 
 #[component]
@@ -108,6 +101,11 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                                 current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
                                     .max(MIN_RENDER_THRESHOLD_MS);
                             }
+                            SourceEvent::SystemLine(content) => {
+                                let mut state = app_state.write();
+                                state.add_line_with_update(content, false);
+                                state.version += 1;
+                            }
                             SourceEvent::Error(e) => {
                                 app_state.write().status_message = Some(format!("Error: {}", e));
                             }
@@ -152,6 +150,11 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                                 last_data_time = Some(Instant::now());
                                 current_threshold_ms = (current_threshold_ms * THRESHOLD_DECAY_FACTOR)
                                     .max(MIN_RENDER_THRESHOLD_MS);
+                            }
+                            SourceEvent::SystemLine(content) => {
+                                let mut state = app_state.write();
+                                state.add_line_with_update(content, false);
+                                state.version += 1;
                             }
                             SourceEvent::Error(e) => {
                                 app_state.write().status_message = Some(format!("Error: {}", e));
@@ -486,17 +489,10 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                                         }
                                     }
                                     span { class: "line-num", "{line_idx + 1}" }
-                                    span { class: "content",
-                                        for (text, style) in highlight_content(&content, &highlight_expr) {
-                                            {
-                                                let class = style.css_class();
-                                                if class.is_empty() {
-                                                    rsx! { "{text}" }
-                                                } else {
-                                                    rsx! { span { class: "{class}", "{text}" } }
-                                                }
-                                            }
-                                        }
+                                    LogLineContent {
+                                        content: content,
+                                        highlight_text: highlight_text.clone(),
+                                        highlight_expr: highlight_expr.clone(),
                                     }
                                 }
                             }
@@ -510,12 +506,13 @@ pub fn GuiApp(props: GuiAppProps) -> Element {
                 span { class: "status-info",
                     "{filtered_count} / {total_lines} lines"
                     if follow_tail { " • Following" }
-                    if let Some(time) = last_update_time {
-                        " • Last: {format_relative_time(time)}"
-                    }
                 }
-                if let Some(ref msg) = status_message {
-                    span { class: "status-msg", "{msg}" }
+                span { class: "status-info",
+                    if let Some(ref msg) = status_message {
+                        "{msg}"
+                    } else if let Some(time) = last_update_time {
+                        "Last: {format_relative_time(time)}"
+                    }
                 }
             }
 

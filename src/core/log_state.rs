@@ -76,6 +76,10 @@ impl Default for LogState {
 
 impl LogState {
     pub fn add_line(&mut self, content: String) -> usize {
+        self.add_line_with_update(content, true)
+    }
+
+    pub fn add_line_with_update(&mut self, content: String, update_time: bool) -> usize {
         let now = Local::now();
         let line = LogLine {
             timestamp: now,
@@ -83,7 +87,9 @@ impl LogState {
         };
         let idx = self.lines.len();
         self.lines.push(line);
-        self.last_update_time = Some(now);
+        if update_time {
+            self.last_update_time = Some(now);
+        }
         idx
     }
 
