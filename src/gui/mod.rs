@@ -4,6 +4,7 @@ mod state;
 mod style;
 
 use anyhow::Result;
+use dioxus::desktop::{Config, WindowBuilder};
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
@@ -16,8 +17,10 @@ pub fn run_with_args(file: Option<PathBuf>, port: Option<u16>) -> Result<()> {
     INIT_FILE.set(file).ok();
     INIT_PORT.set(port).ok();
 
-    // dioxus_native::launch(app_with_args);
-    dioxus::launch(app_with_args);
+    let window = WindowBuilder::new().with_always_on_top(false);
+    let config = Config::default().with_window(window);
+
+    LaunchBuilder::desktop().with_cfg(config).launch(app_with_args);
     Ok(())
 }
 
